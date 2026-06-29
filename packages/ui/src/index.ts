@@ -9,6 +9,36 @@ export type DataGridColumn<TColumn extends string> = {
   readonly defaultVisible?: boolean;
 };
 
+export type FieldSize = "sm" | "md" | "lg";
+
+export type ComponentContract =
+  | "Button"
+  | "IconButton"
+  | "Input"
+  | "Textarea"
+  | "Select"
+  | "Checkbox"
+  | "Radio"
+  | "Badge"
+  | "Avatar"
+  | "Tabs"
+  | "Drawer"
+  | "Modal"
+  | "Tooltip"
+  | "Dropdown"
+  | "Menu"
+  | "Table"
+  | "Pagination"
+  | "SearchBox"
+  | "FilterBar"
+  | "KpiCard"
+  | "StatCard"
+  | "Section"
+  | "Toolbar"
+  | "DataGrid"
+  | "PageHeader"
+  | "Breadcrumb";
+
 export type StatCardModel = {
   readonly label: string;
   readonly value: string;
@@ -18,10 +48,30 @@ export type StatCardModel = {
 
 export const uiClassNames = {
   button: (variant: ButtonVariant = "secondary"): string => `ui-button ui-button-${variant}`,
+  iconButton: "ui-icon-button",
   card: "ui-card",
   dialog: "ui-dialog",
   drawer: "ui-drawer",
   input: "ui-input",
+  textarea: "ui-textarea",
+  select: "ui-select",
+  checkbox: "ui-checkbox",
+  radio: "ui-radio",
+  badge: (tone: StatusTone = "neutral"): string => `ui-badge ui-badge-${tone}`,
+  avatar: "ui-avatar",
+  tabs: "ui-tabs",
+  tooltip: "ui-tooltip",
+  dropdown: "ui-dropdown",
+  menu: "ui-menu",
+  table: "ui-table",
+  pagination: "ui-pagination",
+  searchBox: "ui-search-box",
+  filterBar: "ui-filter-bar",
+  kpiCard: "ui-kpi-card",
+  section: "ui-section",
+  toolbar: "ui-toolbar",
+  pageHeader: "ui-page-header",
+  breadcrumb: "ui-breadcrumb",
   dataGrid: "ui-data-grid",
   emptyState: "ui-empty-state",
   skeleton: "ui-skeleton",

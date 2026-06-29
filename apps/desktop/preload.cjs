@@ -40,6 +40,36 @@ const users = {
   resetSecret: (payload) => request("orix:users.reset-secret", payload)
 };
 
+const customers = {
+  list: (payload) => request("orix:customers.list", payload),
+  get: (id) => request("orix:customers.get", { id }),
+  save: (payload) => request("orix:customers.save", payload),
+  archive: (id) => request("orix:customers.archive", { id }),
+  restore: (id) => request("orix:customers.restore", { id }),
+  statement: (payload) => request("orix:customers.statement", payload),
+  recordPayment: (payload) => request("orix:customers.payment.record", payload),
+  activity: (customerId) => request("orix:customers.activity", { customerId })
+};
+
+const suppliers = {
+  list: (payload) => request("orix:suppliers.list", payload),
+  get: (id) => request("orix:suppliers.get", { id }),
+  save: (payload) => request("orix:suppliers.save", payload),
+  archive: (id) => request("orix:suppliers.archive", { id }),
+  restore: (id) => request("orix:suppliers.restore", { id }),
+  statement: (payload) => request("orix:suppliers.statement", payload),
+  recordPayment: (payload) => request("orix:suppliers.payment.record", payload),
+  activity: (supplierId) => request("orix:suppliers.activity", { supplierId })
+};
+
+const purchases = {
+  list: (payload) => request("orix:purchases.list", payload),
+  get: (id) => request("orix:purchases.get", { id }),
+  saveDraft: (payload) => request("orix:purchases.save-draft", payload),
+  receive: (id) => request("orix:purchases.receive", { id }),
+  cancel: (id, reason) => request("orix:purchases.cancel", { id, reason })
+};
+
 const dashboard = {
   get: () => request("orix:dashboard.get", {})
 };
@@ -62,9 +92,12 @@ contextBridge.exposeInMainWorld("orix", {
     context: () => request("orix:app.context", {})
   },
   auth,
+  customers,
   dashboard,
   inventory,
   settings,
   products,
+  purchases,
+  suppliers,
   users
 });

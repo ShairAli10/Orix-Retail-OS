@@ -164,8 +164,22 @@ export type PermissionCode =
   | "products.view"
   | "products.manage"
   | "customers.view"
+  | "customers.create"
+  | "customers.edit"
+  | "customers.delete"
+  | "customers.payments"
+  | "customers.export"
   | "suppliers.view"
+  | "suppliers.create"
+  | "suppliers.edit"
+  | "suppliers.delete"
+  | "suppliers.payments"
+  | "suppliers.export"
   | "purchases.view"
+  | "purchases.create"
+  | "purchases.edit"
+  | "purchases.receive"
+  | "purchases.cancel"
   | "sales.view"
   | "expenses.view"
   | "reports.view"
@@ -268,8 +282,400 @@ export type DashboardDto = {
   readonly outstandingCustomersMinor: number;
   readonly outstandingSuppliersMinor: number;
   readonly lowStockCount: number;
+  readonly todayCollectionsMinor: number;
+  readonly customersAddedToday: number;
+  readonly supplierPaymentsTodayMinor: number;
+  readonly purchasesThisMonthMinor: number;
+  readonly pendingSupplierPaymentsMinor: number;
   readonly topSellingProductName: string | null;
   readonly recentActivity: readonly RecentActivityDto[];
+  readonly topDebtors: readonly CustomerSummaryDto[];
+  readonly recentlyActiveCustomers: readonly CustomerSummaryDto[];
+  readonly topSuppliers: readonly SupplierSummaryDto[];
+};
+
+export type CustomerStatusFilter = "active" | "archived" | "all";
+
+export type CustomerType = "walk-in" | "regular" | "wholesale" | "vip";
+
+export type CustomerSortBy =
+  "name" | "phone" | "city" | "balance" | "creditLimit" | "lastPurchase" | "status" | "createdAt";
+
+export type CustomerSummaryDto = {
+  readonly id: string;
+  readonly name: string;
+  readonly phone: string | null;
+  readonly city: string | null;
+  readonly balanceMinor: number;
+};
+
+export type CustomerListRequest = {
+  readonly search?: string;
+  readonly status?: CustomerStatusFilter;
+  readonly customerType?: CustomerType | "all";
+  readonly page: number;
+  readonly pageSize: number;
+  readonly sortBy: CustomerSortBy;
+  readonly sortDirection: "asc" | "desc";
+};
+
+export type CustomerListItemDto = {
+  readonly id: string;
+  readonly name: string;
+  readonly phone: string | null;
+  readonly email: string | null;
+  readonly address: string | null;
+  readonly city: string | null;
+  readonly cnic: string | null;
+  readonly tags: readonly string[];
+  readonly customerType: CustomerType;
+  readonly outstandingBalanceMinor: number;
+  readonly creditLimitMinor: number;
+  readonly lastPurchaseAt: string | null;
+  readonly status: "active" | "archived";
+  readonly archivedAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string | null;
+};
+
+export type CustomerPageDto = {
+  readonly items: readonly CustomerListItemDto[];
+  readonly totalItems: number;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly totalPages: number;
+};
+
+export type CustomerDetailDto = CustomerListItemDto & {
+  readonly notes: string | null;
+  readonly openingBalanceMinor: number;
+  readonly openingBalanceDate: string | null;
+  readonly createdByUserId: string | null;
+  readonly updatedByUserId: string | null;
+};
+
+export type CustomerWritePayload = {
+  readonly id?: string;
+  readonly name: string;
+  readonly phone?: string | null;
+  readonly email?: string | null;
+  readonly address?: string | null;
+  readonly city?: string | null;
+  readonly cnic?: string | null;
+  readonly tags: readonly string[];
+  readonly customerType: CustomerType;
+  readonly creditLimitMinor: number;
+  readonly openingBalanceMinor: number;
+  readonly openingBalanceDate?: string | null;
+  readonly notes?: string | null;
+  readonly expectedUpdatedAt?: string | null;
+};
+
+export type CustomerStatementRequest = {
+  readonly customerId: string;
+  readonly dateFrom?: string;
+  readonly dateTo?: string;
+  readonly transactionType?: "all" | "opening-balance" | "payment" | "sale";
+  readonly search?: string;
+  readonly page: number;
+  readonly pageSize: number;
+};
+
+export type CustomerStatementLineDto = {
+  readonly id: string;
+  readonly date: string;
+  readonly reference: string;
+  readonly transactionType: string;
+  readonly description: string;
+  readonly debitMinor: number;
+  readonly creditMinor: number;
+  readonly runningBalanceMinor: number;
+  readonly userName: string;
+};
+
+export type CustomerStatementDto = {
+  readonly customer: CustomerDetailDto;
+  readonly openingBalanceMinor: number;
+  readonly closingBalanceMinor: number;
+  readonly generatedAt: string;
+  readonly preparedBy: string;
+  readonly items: readonly CustomerStatementLineDto[];
+  readonly totalItems: number;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly totalPages: number;
+};
+
+export type CustomerPaymentPayload = {
+  readonly customerId: string;
+  readonly amountMinor: number;
+  readonly paymentMethod: "cash" | "bank" | "jazzcash" | "easypaisa" | "card";
+  readonly paidAt: string;
+  readonly referenceNumber?: string | null;
+  readonly receiptNumber?: string | null;
+  readonly notes?: string | null;
+};
+
+export type CustomerPaymentDto = {
+  readonly id: string;
+  readonly customerId: string;
+  readonly paymentNumber: string;
+  readonly amountMinor: number;
+  readonly paidAt: string;
+  readonly method: string;
+  readonly notes: string | null;
+};
+
+export type CustomerActivityDto = {
+  readonly id: string;
+  readonly action: string;
+  readonly occurredAt: string;
+  readonly userName: string;
+  readonly details: string | null;
+};
+
+export type CustomerIpcError = {
+  readonly code: string;
+  readonly message: string;
+  readonly fields?: readonly string[];
+};
+
+export type SupplierStatusFilter = "active" | "archived" | "all";
+
+export type SupplierSortBy =
+  "name" | "phone" | "city" | "balance" | "lastPurchase" | "status" | "createdAt";
+
+export type SupplierSummaryDto = {
+  readonly id: string;
+  readonly name: string;
+  readonly phone: string | null;
+  readonly city: string | null;
+  readonly balanceMinor: number;
+};
+
+export type SupplierListRequest = {
+  readonly search?: string;
+  readonly status?: SupplierStatusFilter;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly sortBy: SupplierSortBy;
+  readonly sortDirection: "asc" | "desc";
+};
+
+export type SupplierListItemDto = {
+  readonly id: string;
+  readonly name: string;
+  readonly phone: string | null;
+  readonly email: string | null;
+  readonly address: string | null;
+  readonly city: string | null;
+  readonly ntn: string | null;
+  readonly strn: string | null;
+  readonly tags: readonly string[];
+  readonly creditTerms: string | null;
+  readonly outstandingBalanceMinor: number;
+  readonly lastPurchaseAt: string | null;
+  readonly status: "active" | "archived";
+  readonly archivedAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string | null;
+};
+
+export type SupplierPageDto = {
+  readonly items: readonly SupplierListItemDto[];
+  readonly totalItems: number;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly totalPages: number;
+};
+
+export type SupplierDetailDto = SupplierListItemDto & {
+  readonly notes: string | null;
+  readonly openingBalanceMinor: number;
+  readonly openingBalanceDate: string | null;
+  readonly createdByUserId: string | null;
+  readonly updatedByUserId: string | null;
+};
+
+export type SupplierWritePayload = {
+  readonly id?: string;
+  readonly name: string;
+  readonly phone?: string | null;
+  readonly email?: string | null;
+  readonly address?: string | null;
+  readonly city?: string | null;
+  readonly ntn?: string | null;
+  readonly strn?: string | null;
+  readonly tags: readonly string[];
+  readonly creditTerms?: string | null;
+  readonly openingBalanceMinor: number;
+  readonly openingBalanceDate?: string | null;
+  readonly notes?: string | null;
+  readonly expectedUpdatedAt?: string | null;
+};
+
+export type SupplierStatementRequest = {
+  readonly supplierId: string;
+  readonly dateFrom?: string;
+  readonly dateTo?: string;
+  readonly transactionType?: "all" | "opening-balance" | "payment" | "purchase";
+  readonly search?: string;
+  readonly page: number;
+  readonly pageSize: number;
+};
+
+export type SupplierStatementLineDto = {
+  readonly id: string;
+  readonly date: string;
+  readonly reference: string;
+  readonly transactionType: string;
+  readonly description: string;
+  readonly debitMinor: number;
+  readonly creditMinor: number;
+  readonly runningBalanceMinor: number;
+  readonly userName: string;
+};
+
+export type SupplierStatementDto = {
+  readonly supplier: SupplierDetailDto;
+  readonly openingBalanceMinor: number;
+  readonly closingBalanceMinor: number;
+  readonly generatedAt: string;
+  readonly preparedBy: string;
+  readonly items: readonly SupplierStatementLineDto[];
+  readonly totalItems: number;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly totalPages: number;
+};
+
+export type SupplierPaymentPayload = {
+  readonly supplierId: string;
+  readonly amountMinor: number;
+  readonly paymentMethod: "cash" | "bank" | "jazzcash" | "easypaisa" | "card";
+  readonly paidAt: string;
+  readonly referenceNumber?: string | null;
+  readonly receiptNumber?: string | null;
+  readonly notes?: string | null;
+};
+
+export type SupplierPaymentDto = {
+  readonly id: string;
+  readonly supplierId: string;
+  readonly paymentNumber: string;
+  readonly amountMinor: number;
+  readonly paidAt: string;
+  readonly method: string;
+  readonly notes: string | null;
+};
+
+export type SupplierActivityDto = {
+  readonly id: string;
+  readonly action: string;
+  readonly occurredAt: string;
+  readonly userName: string;
+  readonly details: string | null;
+};
+
+export type PurchaseStatusFilter = "draft" | "received" | "cancelled" | "all";
+
+export type PurchaseSortBy =
+  "purchaseNumber" | "supplier" | "purchaseDate" | "dueDate" | "total" | "status" | "createdAt";
+
+export type PurchaseItemPayload = {
+  readonly id?: string;
+  readonly productId: string;
+  readonly unitId: string;
+  readonly quantity: number;
+  readonly unitCostMinor: number;
+  readonly discountMinor: number;
+  readonly taxMinor: number;
+};
+
+export type PurchaseWritePayload = {
+  readonly id?: string;
+  readonly supplierId: string;
+  readonly invoiceNumber?: string | null;
+  readonly purchaseNumber?: string | null;
+  readonly purchaseDate: string;
+  readonly dueDate?: string | null;
+  readonly discountMinor: number;
+  readonly taxMinor: number;
+  readonly freightMinor: number;
+  readonly otherChargesMinor: number;
+  readonly notes?: string | null;
+  readonly items: readonly PurchaseItemPayload[];
+  readonly expectedUpdatedAt?: string | null;
+};
+
+export type PurchaseListRequest = {
+  readonly search?: string;
+  readonly supplierId?: string;
+  readonly status?: PurchaseStatusFilter;
+  readonly dateFrom?: string;
+  readonly dateTo?: string;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly sortBy: PurchaseSortBy;
+  readonly sortDirection: "asc" | "desc";
+};
+
+export type PurchaseListItemDto = {
+  readonly id: string;
+  readonly purchaseNumber: string;
+  readonly invoiceNumber: string | null;
+  readonly supplierId: string;
+  readonly supplierName: string;
+  readonly purchaseDate: string;
+  readonly dueDate: string | null;
+  readonly itemCount: number;
+  readonly totalMinor: number;
+  readonly paidMinor: number;
+  readonly balanceMinor: number;
+  readonly paymentStatus: "unpaid" | "partial" | "paid";
+  readonly status: "draft" | "received" | "cancelled";
+  readonly receivedAt: string | null;
+  readonly cancelledAt: string | null;
+  readonly updatedAt: string | null;
+};
+
+export type PurchasePageDto = {
+  readonly items: readonly PurchaseListItemDto[];
+  readonly totalItems: number;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly totalPages: number;
+};
+
+export type PurchaseItemDto = {
+  readonly id: string;
+  readonly productId: string;
+  readonly productName: string;
+  readonly unitId: string;
+  readonly unitName: string;
+  readonly quantity: number;
+  readonly unitCostMinor: number;
+  readonly discountMinor: number;
+  readonly taxMinor: number;
+  readonly lineTotalMinor: number;
+};
+
+export type PurchaseDetailDto = PurchaseListItemDto & {
+  readonly subtotalMinor: number;
+  readonly discountMinor: number;
+  readonly taxMinor: number;
+  readonly freightMinor: number;
+  readonly otherChargesMinor: number;
+  readonly notes: string | null;
+  readonly items: readonly PurchaseItemDto[];
+  readonly createdAt: string;
+  readonly createdByUserId: string;
+};
+
+export type SupplierIpcError = {
+  readonly code: string;
+  readonly message: string;
+  readonly fields?: readonly string[];
 };
 
 export type InventoryStatusFilter = "all" | "in-stock" | "low-stock" | "out-of-stock";
@@ -594,6 +1000,153 @@ export type InventoryOpeningStockContract = IpcContract<
   InventoryIpcError
 >;
 
+export type CustomerListContract = IpcContract<
+  "orix:customers.list",
+  CustomerListRequest,
+  CustomerPageDto,
+  CustomerIpcError
+>;
+
+export type CustomerGetContract = IpcContract<
+  "orix:customers.get",
+  { readonly id: string },
+  CustomerDetailDto | undefined,
+  CustomerIpcError
+>;
+
+export type CustomerSaveContract = IpcContract<
+  "orix:customers.save",
+  CustomerWritePayload,
+  { readonly customer: CustomerDetailDto },
+  CustomerIpcError
+>;
+
+export type CustomerArchiveContract = IpcContract<
+  "orix:customers.archive",
+  { readonly id: string },
+  { readonly archived: true },
+  CustomerIpcError
+>;
+
+export type CustomerRestoreContract = IpcContract<
+  "orix:customers.restore",
+  { readonly id: string },
+  { readonly restored: true },
+  CustomerIpcError
+>;
+
+export type CustomerStatementContract = IpcContract<
+  "orix:customers.statement",
+  CustomerStatementRequest,
+  CustomerStatementDto,
+  CustomerIpcError
+>;
+
+export type CustomerPaymentRecordContract = IpcContract<
+  "orix:customers.payment.record",
+  CustomerPaymentPayload,
+  { readonly payment: CustomerPaymentDto },
+  CustomerIpcError
+>;
+
+export type CustomerActivityContract = IpcContract<
+  "orix:customers.activity",
+  { readonly customerId: string },
+  { readonly items: readonly CustomerActivityDto[] },
+  CustomerIpcError
+>;
+
+export type SupplierListContract = IpcContract<
+  "orix:suppliers.list",
+  SupplierListRequest,
+  SupplierPageDto,
+  SupplierIpcError
+>;
+
+export type SupplierGetContract = IpcContract<
+  "orix:suppliers.get",
+  { readonly id: string },
+  SupplierDetailDto | undefined,
+  SupplierIpcError
+>;
+
+export type SupplierSaveContract = IpcContract<
+  "orix:suppliers.save",
+  SupplierWritePayload,
+  { readonly supplier: SupplierDetailDto },
+  SupplierIpcError
+>;
+
+export type SupplierArchiveContract = IpcContract<
+  "orix:suppliers.archive",
+  { readonly id: string },
+  { readonly archived: true },
+  SupplierIpcError
+>;
+
+export type SupplierRestoreContract = IpcContract<
+  "orix:suppliers.restore",
+  { readonly id: string },
+  { readonly restored: true },
+  SupplierIpcError
+>;
+
+export type SupplierStatementContract = IpcContract<
+  "orix:suppliers.statement",
+  SupplierStatementRequest,
+  SupplierStatementDto,
+  SupplierIpcError
+>;
+
+export type SupplierPaymentRecordContract = IpcContract<
+  "orix:suppliers.payment.record",
+  SupplierPaymentPayload,
+  { readonly payment: SupplierPaymentDto },
+  SupplierIpcError
+>;
+
+export type SupplierActivityContract = IpcContract<
+  "orix:suppliers.activity",
+  { readonly supplierId: string },
+  { readonly items: readonly SupplierActivityDto[] },
+  SupplierIpcError
+>;
+
+export type PurchaseListContract = IpcContract<
+  "orix:purchases.list",
+  PurchaseListRequest,
+  PurchasePageDto,
+  SupplierIpcError
+>;
+
+export type PurchaseGetContract = IpcContract<
+  "orix:purchases.get",
+  { readonly id: string },
+  PurchaseDetailDto | undefined,
+  SupplierIpcError
+>;
+
+export type PurchaseSaveDraftContract = IpcContract<
+  "orix:purchases.save-draft",
+  PurchaseWritePayload,
+  { readonly purchase: PurchaseDetailDto },
+  SupplierIpcError
+>;
+
+export type PurchaseReceiveContract = IpcContract<
+  "orix:purchases.receive",
+  { readonly id: string },
+  { readonly purchase: PurchaseDetailDto },
+  SupplierIpcError
+>;
+
+export type PurchaseCancelContract = IpcContract<
+  "orix:purchases.cancel",
+  { readonly id: string; readonly reason: string },
+  { readonly cancelled: true },
+  SupplierIpcError
+>;
+
 export type OrixIpcContract =
   | SystemHealthContract
   | AppContextContract
@@ -614,6 +1167,27 @@ export type OrixIpcContract =
   | InventoryMovementsContract
   | InventoryAdjustContract
   | InventoryOpeningStockContract
+  | CustomerListContract
+  | CustomerGetContract
+  | CustomerSaveContract
+  | CustomerArchiveContract
+  | CustomerRestoreContract
+  | CustomerStatementContract
+  | CustomerPaymentRecordContract
+  | CustomerActivityContract
+  | SupplierListContract
+  | SupplierGetContract
+  | SupplierSaveContract
+  | SupplierArchiveContract
+  | SupplierRestoreContract
+  | SupplierStatementContract
+  | SupplierPaymentRecordContract
+  | SupplierActivityContract
+  | PurchaseListContract
+  | PurchaseGetContract
+  | PurchaseSaveDraftContract
+  | PurchaseReceiveContract
+  | PurchaseCancelContract
   | ProductListContract
   | ProductGetContract
   | ProductSaveContract

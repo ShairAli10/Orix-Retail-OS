@@ -4,6 +4,8 @@ import { spacingTokens, themeTokens, uiClassNames } from "./index.js";
 describe("ui design system", () => {
   it("provides stable component class names", () => {
     expect(uiClassNames.button("primary")).toBe("ui-button ui-button-primary");
+    expect(uiClassNames.badge("warning")).toBe("ui-badge ui-badge-warning");
+    expect(uiClassNames.pageHeader).toBe("ui-page-header");
     expect(uiClassNames.emptyState).toBe("ui-empty-state");
   });
 

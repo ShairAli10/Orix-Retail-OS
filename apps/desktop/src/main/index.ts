@@ -11,8 +11,11 @@ import type {
 } from "@orix/core";
 import { err, ok } from "@orix/core";
 import {
+  CustomerManagementApplicationService,
   InventoryManagementApplicationService,
-  ProductManagementApplicationService
+  PurchaseManagementApplicationService,
+  ProductManagementApplicationService,
+  SupplierManagementApplicationService
 } from "@orix/application";
 import { createDatabaseConnection, runMigrations, type DatabaseConnection } from "@orix/database";
 import type {
@@ -21,6 +24,15 @@ import type {
   AppSettingsDto,
   AuthStatusContract,
   CatalogWritePayload,
+  CustomerActivityContract,
+  CustomerArchiveContract,
+  CustomerGetContract,
+  CustomerIpcError,
+  CustomerListContract,
+  CustomerPaymentRecordContract,
+  CustomerRestoreContract,
+  CustomerSaveContract,
+  CustomerStatementContract,
   DashboardGetContract,
   InventoryAdjustContract,
   InventoryIpcError,
@@ -38,6 +50,11 @@ import type {
   ProductListContract,
   ProductRestoreContract,
   ProductSaveContract,
+  PurchaseCancelContract,
+  PurchaseGetContract,
+  PurchaseListContract,
+  PurchaseReceiveContract,
+  PurchaseSaveDraftContract,
   SettingsGetContract,
   SettingsSaveContract,
   LoginContract,
@@ -53,7 +70,16 @@ import type {
   PermissionCode,
   ResetSecretPayload,
   RoleName,
-  SetupStorePayload
+  SetupStorePayload,
+  SupplierActivityContract,
+  SupplierArchiveContract,
+  SupplierGetContract,
+  SupplierIpcError,
+  SupplierListContract,
+  SupplierPaymentRecordContract,
+  SupplierRestoreContract,
+  SupplierSaveContract,
+  SupplierStatementContract
 } from "@orix/electron";
 import { createRepositories } from "@orix/repositories";
 import { err as ipcErr, ok as ipcOk, type Result } from "@orix/shared";
@@ -81,6 +107,9 @@ type AppState = {
   readonly connection: DatabaseConnection;
   readonly productService: ProductManagementApplicationService;
   readonly inventoryService: InventoryManagementApplicationService;
+  readonly customerService: CustomerManagementApplicationService;
+  readonly supplierService: SupplierManagementApplicationService;
+  readonly purchaseService: PurchaseManagementApplicationService;
   readonly storeId: string;
   readonly branchId: string;
   readonly businessDayId: string;
@@ -147,8 +176,22 @@ const allPermissions = [
   "products.view",
   "products.manage",
   "customers.view",
+  "customers.create",
+  "customers.edit",
+  "customers.delete",
+  "customers.payments",
+  "customers.export",
   "suppliers.view",
+  "suppliers.create",
+  "suppliers.edit",
+  "suppliers.delete",
+  "suppliers.payments",
+  "suppliers.export",
   "purchases.view",
+  "purchases.create",
+  "purchases.edit",
+  "purchases.receive",
+  "purchases.cancel",
   "sales.view",
   "expenses.view",
   "reports.view",
@@ -167,6 +210,8 @@ const rolePermissionMap = {
     "pos.view",
     "products.view",
     "customers.view",
+    "customers.payments",
+    "suppliers.view",
     "sales.view",
     "about.view"
   ],
@@ -176,12 +221,24 @@ const rolePermissionMap = {
     "inventory.manage",
     "products.view",
     "products.manage",
+    "customers.view",
     "suppliers.view",
+    "suppliers.create",
+    "suppliers.edit",
+    "suppliers.payments",
     "purchases.view",
+    "purchases.create",
+    "purchases.edit",
+    "purchases.receive",
+    "purchases.cancel",
     "about.view"
   ],
   Accountant: [
     "dashboard.view",
+    "customers.view",
+    "customers.payments",
+    "suppliers.view",
+    "suppliers.payments",
     "expenses.view",
     "reports.view",
     "sales.view",
@@ -312,6 +369,12 @@ const initializeAppState = (): AppState => {
     migrationsFolder: resolveMigrationsFolder()
   });
   const bootstrap = ensureBootstrapData(connection);
+  seedRolesAndPermissions(
+    connection,
+    bootstrap.storeId,
+    bootstrap.userId,
+    new Date().toISOString()
+  );
   const repositories = createRepositories(connection);
   const productService = new ProductManagementApplicationService({
     repositories,
@@ -323,11 +386,29 @@ const initializeAppState = (): AppState => {
     transactionRunner: new SqliteTransactionRunner(connection),
     eventPublisher: new PersistedEventPublisher(connection)
   });
+  const customerService = new CustomerManagementApplicationService({
+    repositories,
+    transactionRunner: new SqliteTransactionRunner(connection),
+    eventPublisher: new PersistedEventPublisher(connection)
+  });
+  const supplierService = new SupplierManagementApplicationService({
+    repositories,
+    transactionRunner: new SqliteTransactionRunner(connection),
+    eventPublisher: new PersistedEventPublisher(connection)
+  });
+  const purchaseService = new PurchaseManagementApplicationService({
+    repositories,
+    transactionRunner: new SqliteTransactionRunner(connection),
+    eventPublisher: new PersistedEventPublisher(connection)
+  });
 
   return {
     connection,
     productService,
     inventoryService,
+    customerService,
+    supplierService,
+    purchaseService,
     ...bootstrap,
     locked: true,
     rememberedUsername: readRememberedUsername(connection, bootstrap.storeId)
@@ -825,6 +906,23 @@ const inventoryError = (error: CoreError): InventoryIpcError => {
 
 const toInventoryIpc = <T>(result: CoreResult<T>): Result<T, InventoryIpcError> =>
   result.ok ? ipcOk(result.value) : ipcErr(inventoryError(result.error));
+
+const customerError = (error: CoreError): CustomerIpcError => {
+  const fields =
+    Array.isArray(error.context?.fields) &&
+    error.context.fields.every((field): field is string => typeof field === "string")
+      ? error.context.fields
+      : undefined;
+  return fields === undefined
+    ? { code: error.code, message: error.message }
+    : { code: error.code, message: error.message, fields };
+};
+
+const toCustomerIpc = <T>(result: CoreResult<T>): Result<T, CustomerIpcError> =>
+  result.ok ? ipcOk(result.value) : ipcErr(customerError(result.error));
+
+const toSupplierIpc = <T>(result: CoreResult<T>): Result<T, SupplierIpcError> =>
+  result.ok ? ipcOk(result.value) : ipcErr(customerError(result.error));
 
 const appError = (message: string): AppIpcError => ({
   code: "APP_OPERATION_FAILED",
@@ -1335,6 +1433,80 @@ const registerAppHandlers = (state: AppState): void => {
         state.connection,
         "SELECT COALESCE(SUM(credit_minor - debit_minor), 0) AS amount FROM ledger_entries WHERE account_ref_type = 'supplier'"
       );
+      const todayCollectionsMinor = moneyAmount(
+        state.connection,
+        "SELECT COALESCE(SUM(amount_minor), 0) AS amount FROM customer_payments WHERE business_day_id = ? AND status = 'recorded'",
+        state.businessDayId
+      );
+      const supplierPaymentsTodayMinor = moneyAmount(
+        state.connection,
+        "SELECT COALESCE(SUM(amount_minor), 0) AS amount FROM supplier_payments WHERE business_day_id = ? AND status = 'recorded'",
+        state.businessDayId
+      );
+      const monthStart = `${new Date().toISOString().slice(0, 7)}-01T00:00:00.000Z`;
+      const purchasesThisMonthMinor = moneyAmount(
+        state.connection,
+        "SELECT COALESCE(SUM(total_minor), 0) AS amount FROM purchases WHERE store_id = ? AND status = 'received' AND purchase_date >= ?",
+        state.storeId,
+        monthStart
+      );
+      const pendingSupplierPaymentsMinor = outstandingSuppliersMinor;
+      const customersAddedTodayResult = state.connection.sqlite
+        .prepare("SELECT business_date AS businessDate FROM business_days WHERE id = ?")
+        .get(state.businessDayId) as { readonly businessDate: string } | undefined;
+      const customersAddedToday = state.connection.sqlite
+        .prepare(
+          "SELECT COUNT(*) AS count FROM customers WHERE store_id = ? AND substr(created_at, 1, 10) = ?"
+        )
+        .get(
+          state.storeId,
+          customersAddedTodayResult?.businessDate ?? new Date().toISOString().slice(0, 10)
+        ) as CountRow;
+      const topDebtors = state.connection.sqlite
+        .prepare(
+          `SELECT c.id, c.name, c.phone, c.notes,
+                  COALESCE(SUM(le.debit_minor - le.credit_minor), 0) AS balanceMinor
+             FROM customers c
+             LEFT JOIN ledger_entries le ON le.account_ref_type = 'customer' AND le.account_ref_id = c.id
+            WHERE c.store_id = ? AND c.archived_at IS NULL
+            GROUP BY c.id
+            HAVING balanceMinor > 0
+            ORDER BY balanceMinor DESC
+            LIMIT 10`
+        )
+        .all(state.storeId) as {
+        readonly id: string;
+        readonly name: string;
+        readonly phone: string | null;
+        readonly notes: string | null;
+        readonly balanceMinor: number;
+      }[];
+      const recentlyActiveCustomers = state.connection.sqlite
+        .prepare(
+          `SELECT c.id, c.name, c.phone, c.notes,
+                  COALESCE(SUM(le.debit_minor - le.credit_minor), 0) AS balanceMinor
+             FROM customers c
+             LEFT JOIN ledger_entries le ON le.account_ref_type = 'customer' AND le.account_ref_id = c.id
+             LEFT JOIN ledger_transactions lt ON lt.id = le.ledger_transaction_id
+            WHERE c.store_id = ? AND c.archived_at IS NULL
+            GROUP BY c.id
+            ORDER BY MAX(COALESCE(lt.posted_at, c.updated_at, c.created_at)) DESC
+            LIMIT 10`
+        )
+        .all(state.storeId) as typeof topDebtors;
+      const topSuppliers = state.connection.sqlite
+        .prepare(
+          `SELECT s.id, s.name, s.phone, s.notes,
+                  COALESCE(SUM(p.total_minor), 0) AS balanceMinor
+             FROM suppliers s
+             LEFT JOIN purchases p ON p.supplier_id = s.id AND p.status = 'received'
+            WHERE s.store_id = ? AND s.archived_at IS NULL
+            GROUP BY s.id
+            HAVING balanceMinor > 0
+            ORDER BY balanceMinor DESC
+            LIMIT 10`
+        )
+        .all(state.storeId) as typeof topDebtors;
       const lowStockCount = countAmount(
         state.connection,
         `SELECT COUNT(*) AS count
@@ -1369,8 +1541,34 @@ const registerAppHandlers = (state: AppState): void => {
         outstandingCustomersMinor,
         outstandingSuppliersMinor,
         lowStockCount,
+        todayCollectionsMinor,
+        customersAddedToday: customersAddedToday.count,
+        supplierPaymentsTodayMinor,
+        purchasesThisMonthMinor,
+        pendingSupplierPaymentsMinor,
         topSellingProductName: null,
-        recentActivity
+        recentActivity,
+        topDebtors: topDebtors.map((customer) => ({
+          id: customer.id,
+          name: customer.name,
+          phone: customer.phone,
+          city: null,
+          balanceMinor: customer.balanceMinor
+        })),
+        recentlyActiveCustomers: recentlyActiveCustomers.map((customer) => ({
+          id: customer.id,
+          name: customer.name,
+          phone: customer.phone,
+          city: null,
+          balanceMinor: customer.balanceMinor
+        })),
+        topSuppliers: topSuppliers.map((supplier) => ({
+          id: supplier.id,
+          name: supplier.name,
+          phone: supplier.phone,
+          city: null,
+          balanceMinor: supplier.balanceMinor
+        }))
       });
     } catch {
       return appFail("Unable to load dashboard metrics.");
@@ -1547,6 +1745,323 @@ const registerInventoryHandlers = (state: AppState): void => {
   );
 };
 
+const can = (state: AppState, permission: PermissionCode): boolean =>
+  permissionsForUser(state.connection, state.storeId, state.userId).includes(permission);
+
+const permissionDenied = <T>(
+  message = "You do not have permission for this action."
+): Result<T, CustomerIpcError> => ipcErr({ code: "CUSTOMER_PERMISSION_DENIED", message });
+
+const supplierPermissionDenied = <T>(
+  message = "You do not have permission for this action."
+): Result<T, SupplierIpcError> => ipcErr({ code: "SUPPLIER_PERMISSION_DENIED", message });
+
+const registerCustomerHandlers = (state: AppState): void => {
+  ipcMain.handle("orix:customers.list", (_event, request: CustomerListContract["request"]) => {
+    if (!can(state, "customers.view")) return permissionDenied();
+    return toCustomerIpc(
+      state.customerService.listCustomers({
+        ...request.payload,
+        storeId: state.storeId,
+        page: Math.max(1, request.payload.page),
+        pageSize: Math.max(1, request.payload.pageSize)
+      })
+    );
+  });
+
+  ipcMain.handle("orix:customers.get", (_event, request: CustomerGetContract["request"]) => {
+    if (!can(state, "customers.view")) return permissionDenied();
+    return toCustomerIpc(state.customerService.getCustomer(request.payload.id));
+  });
+
+  ipcMain.handle(
+    "orix:customers.save",
+    async (_event, request: CustomerSaveContract["request"]) => {
+      const isUpdate = request.payload.id !== undefined;
+      if (!can(state, isUpdate ? "customers.edit" : "customers.create")) return permissionDenied();
+      const input = {
+        ...request.payload,
+        storeId: state.storeId,
+        branchId: state.branchId,
+        businessDayId: state.businessDayId,
+        userId: state.userId
+      };
+      return toCustomerIpc(
+        await (request.payload.id === undefined
+          ? state.customerService.createCustomer(input)
+          : state.customerService.updateCustomer({ ...input, id: request.payload.id }))
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "orix:customers.archive",
+    async (_event, request: CustomerArchiveContract["request"]) => {
+      if (!can(state, "customers.delete")) return permissionDenied();
+      return toCustomerIpc(
+        await state.customerService
+          .archiveCustomer({
+            id: request.payload.id,
+            storeId: state.storeId,
+            branchId: state.branchId,
+            businessDayId: state.businessDayId,
+            userId: state.userId
+          })
+          .then((result) => (result.ok ? ok({ archived: true as const }) : result))
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "orix:customers.restore",
+    async (_event, request: CustomerRestoreContract["request"]) => {
+      if (!can(state, "customers.delete")) return permissionDenied();
+      return toCustomerIpc(
+        await state.customerService
+          .restoreCustomer({
+            id: request.payload.id,
+            storeId: state.storeId,
+            branchId: state.branchId,
+            businessDayId: state.businessDayId,
+            userId: state.userId
+          })
+          .then((result) => (result.ok ? ok({ restored: true as const }) : result))
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "orix:customers.statement",
+    (_event, request: CustomerStatementContract["request"]) => {
+      if (!can(state, "customers.view")) return permissionDenied();
+      const user = state.connection.sqlite
+        .prepare("SELECT display_name AS name FROM users WHERE id = ?")
+        .get(state.userId) as { readonly name: string } | undefined;
+      return toCustomerIpc(
+        state.customerService.statement(
+          { ...request.payload, storeId: state.storeId },
+          user?.name ?? "Owner"
+        )
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "orix:customers.payment.record",
+    async (_event, request: CustomerPaymentRecordContract["request"]) => {
+      if (!can(state, "customers.payments")) return permissionDenied();
+      return toCustomerIpc(
+        await state.customerService.recordPayment({
+          ...request.payload,
+          storeId: state.storeId,
+          branchId: state.branchId,
+          businessDayId: state.businessDayId,
+          userId: state.userId
+        })
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "orix:customers.activity",
+    (_event, request: CustomerActivityContract["request"]) => {
+      if (!can(state, "customers.view")) return permissionDenied();
+      const result = state.customerService.activity(request.payload.customerId);
+      return toCustomerIpc(result.ok ? ok({ items: result.value }) : result);
+    }
+  );
+};
+
+const registerSupplierHandlers = (state: AppState): void => {
+  ipcMain.handle("orix:suppliers.list", (_event, request: SupplierListContract["request"]) => {
+    if (!can(state, "suppliers.view")) return supplierPermissionDenied();
+    return toSupplierIpc(
+      state.supplierService.listSuppliers({
+        ...request.payload,
+        storeId: state.storeId,
+        page: Math.max(1, request.payload.page),
+        pageSize: Math.max(1, request.payload.pageSize)
+      })
+    );
+  });
+
+  ipcMain.handle("orix:suppliers.get", (_event, request: SupplierGetContract["request"]) => {
+    if (!can(state, "suppliers.view")) return supplierPermissionDenied();
+    return toSupplierIpc(state.supplierService.getSupplier(request.payload.id));
+  });
+
+  ipcMain.handle(
+    "orix:suppliers.save",
+    async (_event, request: SupplierSaveContract["request"]) => {
+      const isUpdate = request.payload.id !== undefined;
+      if (!can(state, isUpdate ? "suppliers.edit" : "suppliers.create")) {
+        return supplierPermissionDenied();
+      }
+      const input = {
+        ...request.payload,
+        storeId: state.storeId,
+        branchId: state.branchId,
+        businessDayId: state.businessDayId,
+        userId: state.userId
+      };
+      return toSupplierIpc(
+        await (request.payload.id === undefined
+          ? state.supplierService.createSupplier(input)
+          : state.supplierService.updateSupplier({ ...input, id: request.payload.id }))
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "orix:suppliers.archive",
+    async (_event, request: SupplierArchiveContract["request"]) => {
+      if (!can(state, "suppliers.delete")) return supplierPermissionDenied();
+      return toSupplierIpc(
+        await state.supplierService
+          .archiveSupplier({
+            id: request.payload.id,
+            storeId: state.storeId,
+            branchId: state.branchId,
+            businessDayId: state.businessDayId,
+            userId: state.userId
+          })
+          .then((result) => (result.ok ? ok({ archived: true as const }) : result))
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "orix:suppliers.restore",
+    async (_event, request: SupplierRestoreContract["request"]) => {
+      if (!can(state, "suppliers.delete")) return supplierPermissionDenied();
+      return toSupplierIpc(
+        await state.supplierService
+          .restoreSupplier({
+            id: request.payload.id,
+            storeId: state.storeId,
+            branchId: state.branchId,
+            businessDayId: state.businessDayId,
+            userId: state.userId
+          })
+          .then((result) => (result.ok ? ok({ restored: true as const }) : result))
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "orix:suppliers.statement",
+    (_event, request: SupplierStatementContract["request"]) => {
+      if (!can(state, "suppliers.view")) return supplierPermissionDenied();
+      const user = state.connection.sqlite
+        .prepare("SELECT display_name AS name FROM users WHERE id = ?")
+        .get(state.userId) as { readonly name: string } | undefined;
+      return toSupplierIpc(
+        state.supplierService.statement(
+          { ...request.payload, storeId: state.storeId },
+          user?.name ?? "Owner"
+        )
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "orix:suppliers.payment.record",
+    async (_event, request: SupplierPaymentRecordContract["request"]) => {
+      if (!can(state, "suppliers.payments")) return supplierPermissionDenied();
+      return toSupplierIpc(
+        await state.supplierService.recordPayment({
+          ...request.payload,
+          storeId: state.storeId,
+          branchId: state.branchId,
+          businessDayId: state.businessDayId,
+          userId: state.userId
+        })
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "orix:suppliers.activity",
+    (_event, request: SupplierActivityContract["request"]) => {
+      if (!can(state, "suppliers.view")) return supplierPermissionDenied();
+      return toSupplierIpc(state.supplierService.activity(request.payload.supplierId));
+    }
+  );
+};
+
+const registerPurchaseHandlers = (state: AppState): void => {
+  ipcMain.handle("orix:purchases.list", (_event, request: PurchaseListContract["request"]) => {
+    if (!can(state, "purchases.view")) return supplierPermissionDenied();
+    return toSupplierIpc(
+      state.purchaseService.listPurchases({
+        ...request.payload,
+        storeId: state.storeId,
+        page: Math.max(1, request.payload.page),
+        pageSize: Math.max(1, request.payload.pageSize)
+      })
+    );
+  });
+
+  ipcMain.handle("orix:purchases.get", (_event, request: PurchaseGetContract["request"]) => {
+    if (!can(state, "purchases.view")) return supplierPermissionDenied();
+    return toSupplierIpc(state.purchaseService.getPurchase(request.payload.id));
+  });
+
+  ipcMain.handle(
+    "orix:purchases.save-draft",
+    async (_event, request: PurchaseSaveDraftContract["request"]) => {
+      const isUpdate = request.payload.id !== undefined;
+      if (!can(state, isUpdate ? "purchases.edit" : "purchases.create")) {
+        return supplierPermissionDenied();
+      }
+      return toSupplierIpc(
+        await state.purchaseService.saveDraft({
+          ...request.payload,
+          storeId: state.storeId,
+          branchId: state.branchId,
+          businessDayId: state.businessDayId,
+          userId: state.userId
+        })
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "orix:purchases.receive",
+    async (_event, request: PurchaseReceiveContract["request"]) => {
+      if (!can(state, "purchases.receive")) return supplierPermissionDenied();
+      return toSupplierIpc(
+        await state.purchaseService.receivePurchase({
+          id: request.payload.id,
+          storeId: state.storeId,
+          branchId: state.branchId,
+          businessDayId: state.businessDayId,
+          userId: state.userId
+        })
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "orix:purchases.cancel",
+    async (_event, request: PurchaseCancelContract["request"]) => {
+      if (!can(state, "purchases.cancel")) return supplierPermissionDenied();
+      return toSupplierIpc(
+        await state.purchaseService
+          .cancelDraft({
+            id: request.payload.id,
+            reason: request.payload.reason,
+            storeId: state.storeId,
+            branchId: state.branchId,
+            businessDayId: state.businessDayId,
+            userId: state.userId
+          })
+          .then((result) => (result.ok ? ok({ cancelled: true as const }) : result))
+      );
+    }
+  );
+};
+
 const toCatalogWriteInput = (payload: CatalogWritePayload, state: AppState) => ({
   ...payload,
   storeId: state.storeId,
@@ -1572,6 +2087,9 @@ void app.whenReady().then(() => {
   registerAuthHandlers(appState);
   registerAppHandlers(appState);
   registerUserHandlers(appState);
+  registerCustomerHandlers(appState);
+  registerSupplierHandlers(appState);
+  registerPurchaseHandlers(appState);
   registerInventoryHandlers(appState);
   registerProductHandlers(appState);
   createMainWindow();
