@@ -1,0 +1,21 @@
+{
+  "name": "@orix/repositories",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@orix/core": "workspace:*",
+    "@orix/database": "workspace:*",
+    "drizzle-orm": "^0.38.0"
+  }
+}

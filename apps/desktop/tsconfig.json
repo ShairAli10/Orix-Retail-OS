@@ -1,0 +1,33 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "outDir": "dist",
+    "rootDir": "src",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "references": [
+    {
+      "path": "../../packages/application"
+    },
+    {
+      "path": "../../packages/business"
+    },
+    {
+      "path": "../../packages/database"
+    },
+    {
+      "path": "../../packages/electron"
+    },
+    {
+      "path": "../../packages/repositories"
+    },
+    {
+      "path": "../../packages/shared"
+    },
+    {
+      "path": "../../packages/ui"
+    }
+  ]
+}

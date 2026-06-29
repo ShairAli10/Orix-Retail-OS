@@ -1,0 +1,36 @@
+{
+  "name": "@orix/database",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./connection": {
+      "types": "./dist/connection/index.d.ts",
+      "default": "./dist/connection/index.js"
+    },
+    "./migrations": {
+      "types": "./dist/migrations/index.d.ts",
+      "default": "./dist/migrations/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema/index.d.ts",
+      "default": "./dist/schema/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@orix/shared": "workspace:*",
+    "better-sqlite3": "^11.7.0",
+    "drizzle-orm": "^0.38.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12"
+  }
+}

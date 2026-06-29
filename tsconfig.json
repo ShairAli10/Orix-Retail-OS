@@ -1,0 +1,44 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./apps/desktop"
+    },
+    {
+      "path": "./packages/business"
+    },
+    {
+      "path": "./packages/application"
+    },
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/database"
+    },
+    {
+      "path": "./packages/domain"
+    },
+    {
+      "path": "./packages/electron"
+    },
+    {
+      "path": "./packages/inventory"
+    },
+    {
+      "path": "./packages/ledger"
+    },
+    {
+      "path": "./packages/printer"
+    },
+    {
+      "path": "./packages/repositories"
+    },
+    {
+      "path": "./packages/shared"
+    },
+    {
+      "path": "./packages/ui"
+    }
+  ]
+}

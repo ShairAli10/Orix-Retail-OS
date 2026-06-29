@@ -1,0 +1,30 @@
+{
+  "name": "@orix/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b && vite build",
+    "smoke": "electron . --smoke",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@orix/application": "workspace:*",
+    "@orix/business": "workspace:*",
+    "@orix/core": "workspace:*",
+    "@orix/database": "workspace:*",
+    "@orix/electron": "workspace:*",
+    "@orix/repositories": "workspace:*",
+    "@orix/shared": "workspace:*",
+    "@orix/ui": "workspace:*",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "electron": "^33.4.11",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  },
+  "main": "electron-main.cjs"
+}

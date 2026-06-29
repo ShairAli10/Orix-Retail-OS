@@ -1,0 +1,68 @@
+{
+  "name": "@orix/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./customers": {
+      "types": "./dist/customers/index.d.ts",
+      "default": "./dist/customers/index.js"
+    },
+    "./suppliers": {
+      "types": "./dist/suppliers/index.d.ts",
+      "default": "./dist/suppliers/index.js"
+    },
+    "./products": {
+      "types": "./dist/products/index.d.ts",
+      "default": "./dist/products/index.js"
+    },
+    "./inventory": {
+      "types": "./dist/inventory/index.d.ts",
+      "default": "./dist/inventory/index.js"
+    },
+    "./sales": {
+      "types": "./dist/sales/index.d.ts",
+      "default": "./dist/sales/index.js"
+    },
+    "./purchases": {
+      "types": "./dist/purchases/index.d.ts",
+      "default": "./dist/purchases/index.js"
+    },
+    "./ledger": {
+      "types": "./dist/ledger/index.d.ts",
+      "default": "./dist/ledger/index.js"
+    },
+    "./payments": {
+      "types": "./dist/payments/index.d.ts",
+      "default": "./dist/payments/index.js"
+    },
+    "./expenses": {
+      "types": "./dist/expenses/index.d.ts",
+      "default": "./dist/expenses/index.js"
+    },
+    "./users": {
+      "types": "./dist/users/index.d.ts",
+      "default": "./dist/users/index.js"
+    },
+    "./settings": {
+      "types": "./dist/settings/index.d.ts",
+      "default": "./dist/settings/index.js"
+    },
+    "./shared": {
+      "types": "./dist/shared/index.d.ts",
+      "default": "./dist/shared/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@orix/shared": "workspace:*",
+    "zod": "^3.24.0"
+  }
+}
