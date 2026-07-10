@@ -142,8 +142,105 @@ export type AppSettingsDto = {
   readonly backupLocation: string;
 };
 
+export type MigrationIssueSeverity = "info" | "warning" | "error";
+
+export type MigrationIssueDto = {
+  readonly severity: MigrationIssueSeverity;
+  readonly code: string;
+  readonly message: string;
+  readonly itemId?: string;
+  readonly value?: string;
+};
+
+export type OspoMigrationProductDto = {
+  readonly sourceItemId: string;
+  readonly name: string;
+  readonly categoryName: string;
+  readonly unitName: string;
+  readonly barcode: string | null;
+  readonly purchasePriceMinor: number;
+  readonly salePriceMinor: number;
+  readonly minimumStock: number;
+  readonly openingStock: number;
+  readonly description: string | null;
+  readonly archived: boolean;
+};
+
+export type OspoMigrationPreviewDto = {
+  readonly generatedAt: string;
+  readonly source: {
+    readonly itemsFile: string;
+    readonly sqlFile: string | null;
+  };
+  readonly store: {
+    readonly company: string | null;
+    readonly address: string | null;
+    readonly phone: string | null;
+    readonly email: string | null;
+    readonly currencyCode: string | null;
+  };
+  readonly totals: {
+    readonly itemRows: number;
+    readonly activeItems: number;
+    readonly archivedItems: number;
+    readonly importableProducts: number;
+    readonly categories: number;
+    readonly units: number;
+    readonly stockLocations: number;
+    readonly quantityRows: number;
+    readonly productsWithPositiveStock: number;
+    readonly productsWithNegativeStock: number;
+    readonly duplicateBarcodes: number;
+    readonly duplicateNames: number;
+    readonly missingBarcodes: number;
+    readonly zeroCostPrice: number;
+    readonly zeroSalePrice: number;
+  };
+  readonly issues: readonly MigrationIssueDto[];
+  readonly sampleProducts: readonly OspoMigrationProductDto[];
+};
+
+export type OspoMigrationFilesDto = {
+  readonly itemsFile: string | null;
+  readonly sqlFile: string | null;
+};
+
+export type OspoMigrationPreviewPayload = {
+  readonly itemsFile: string;
+  readonly sqlFile?: string;
+};
+
+export type OspoMigrationImportPayload = {
+  readonly itemsFile: string;
+  readonly sqlFile: string;
+  readonly mode: "valid-only" | "strict";
+};
+
+export type OspoMigrationSkippedProductDto = {
+  readonly sourceItemId: string;
+  readonly name: string;
+  readonly reason: string;
+};
+
+export type OspoMigrationImportResultDto = {
+  readonly importedAt: string;
+  readonly createdCategories: number;
+  readonly createdUnits: number;
+  readonly createdProducts: number;
+  readonly openingStockTransactions: number;
+  readonly skippedProducts: readonly OspoMigrationSkippedProductDto[];
+};
+
+export type MigrationIpcError = {
+  readonly code: string;
+  readonly message: string;
+};
+
 export type AppContextDto = {
   readonly storeName: string;
+  readonly storePhone: string | null;
+  readonly storeEmail: string | null;
+  readonly storeAddress: string | null;
   readonly storeLogoDataUrl: string | null;
   readonly businessDayStatus: "open" | "closed";
   readonly currentUser: string;
@@ -181,6 +278,10 @@ export type PermissionCode =
   | "purchases.receive"
   | "purchases.cancel"
   | "sales.view"
+  | "sales.create"
+  | "sales.complete"
+  | "sales.cancel"
+  | "sales.print"
   | "expenses.view"
   | "reports.view"
   | "settings.view"
@@ -678,6 +779,154 @@ export type SupplierIpcError = {
   readonly fields?: readonly string[];
 };
 
+export type SaleStatusFilter = "draft" | "held" | "completed" | "cancelled" | "all";
+export type SalePaymentType = "cash" | "credit" | "mixed";
+export type SaleSortBy = "saleNumber" | "saleDate" | "customer" | "total" | "status" | "createdAt";
+
+export type SaleItemPayload = {
+  readonly productId: string;
+  readonly unitId: string;
+  readonly quantity: number;
+  readonly unitPriceMinor: number;
+  readonly discountMinor: number;
+  readonly taxMinor: number;
+};
+
+export type SaleWritePayload = {
+  readonly id?: string;
+  readonly customerId?: string | null;
+  readonly saleNumber?: string | null;
+  readonly saleDate: string;
+  readonly paymentType: SalePaymentType;
+  readonly discountMinor: number;
+  readonly taxMinor: number;
+  readonly cashReceivedMinor: number;
+  readonly notes?: string | null;
+  readonly holdReason?: string | null;
+  readonly items: readonly SaleItemPayload[];
+  readonly expectedUpdatedAt?: string | null;
+};
+
+export type SaleListRequest = {
+  readonly search?: string;
+  readonly customerId?: string;
+  readonly status?: SaleStatusFilter;
+  readonly dateFrom?: string;
+  readonly dateTo?: string;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly sortBy: SaleSortBy;
+  readonly sortDirection: "asc" | "desc";
+};
+
+export type SaleListItemDto = {
+  readonly id: string;
+  readonly saleNumber: string;
+  readonly customerId: string | null;
+  readonly customerName: string | null;
+  readonly saleDate: string;
+  readonly itemCount: number;
+  readonly subtotalMinor: number;
+  readonly discountMinor: number;
+  readonly totalMinor: number;
+  readonly paidMinor: number;
+  readonly changeDueMinor: number;
+  readonly paymentType: SalePaymentType;
+  readonly status: "draft" | "held" | "completed" | "cancelled";
+  readonly completedAt: string | null;
+  readonly cancelledAt: string | null;
+  readonly updatedAt: string | null;
+};
+
+export type SaleItemDto = {
+  readonly id: string;
+  readonly productId: string;
+  readonly productName: string;
+  readonly barcode: string | null;
+  readonly unitId: string;
+  readonly unitName: string;
+  readonly quantity: number;
+  readonly unitPriceMinor: number;
+  readonly discountMinor: number;
+  readonly taxMinor: number;
+  readonly lineTotalMinor: number;
+};
+
+export type SaleDetailDto = SaleListItemDto & {
+  readonly taxMinor: number;
+  readonly notes: string | null;
+  readonly holdReason: string | null;
+  readonly items: readonly SaleItemDto[];
+  readonly createdAt: string;
+  readonly createdByUserId: string;
+  readonly cashierName: string;
+};
+
+export type SalePageDto = {
+  readonly items: readonly SaleListItemDto[];
+  readonly totalItems: number;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly totalPages: number;
+};
+
+export type ReceiptLineItemDto = {
+  readonly name: string;
+  readonly quantity: number;
+  readonly unitPriceMinor: number;
+  readonly lineTotalMinor: number;
+};
+
+export type ReceiptDto = {
+  readonly saleId: string;
+  readonly saleNumber: string;
+  readonly saleDate: string;
+  readonly cashierName: string;
+  readonly customerName: string;
+  readonly subtotalMinor: number;
+  readonly discountMinor: number;
+  readonly totalMinor: number;
+  readonly paidMinor: number;
+  readonly changeDueMinor: number;
+  readonly paymentType: SalePaymentType;
+  readonly items: readonly ReceiptLineItemDto[];
+};
+
+export type CashRegisterDto = {
+  readonly openingCashMinor: number;
+  readonly cashSalesMinor: number;
+  readonly customerPaymentsMinor: number;
+  readonly expensesMinor: number;
+  readonly expectedCashMinor: number;
+  readonly salesCount: number;
+  readonly averageSaleMinor: number;
+};
+
+export type SalesDashboardDto = {
+  readonly todayRevenueMinor: number;
+  readonly todayProfitMinor: number | null;
+  readonly salesCount: number;
+  readonly averageSaleMinor: number;
+  readonly bestSellingProducts: readonly {
+    readonly productId: string;
+    readonly productName: string;
+    readonly quantity: number;
+    readonly revenueMinor: number;
+  }[];
+  readonly bestCustomers: readonly {
+    readonly customerId: string;
+    readonly customerName: string;
+    readonly revenueMinor: number;
+  }[];
+  readonly recentSales: readonly SaleListItemDto[];
+};
+
+export type SaleIpcError = {
+  readonly code: string;
+  readonly message: string;
+  readonly fields?: readonly string[];
+};
+
 export type InventoryStatusFilter = "all" | "in-stock" | "low-stock" | "out-of-stock";
 
 export type InventorySortBy =
@@ -900,6 +1149,27 @@ export type SettingsSaveContract = IpcContract<
   AppSettingsDto,
   AppSettingsDto,
   AppIpcError
+>;
+
+export type OspoMigrationSelectFilesContract = IpcContract<
+  "orix:migration.ospos.select-files",
+  Record<string, never>,
+  OspoMigrationFilesDto,
+  MigrationIpcError
+>;
+
+export type OspoMigrationPreviewContract = IpcContract<
+  "orix:migration.ospos.preview",
+  OspoMigrationPreviewPayload,
+  OspoMigrationPreviewDto,
+  MigrationIpcError
+>;
+
+export type OspoMigrationImportContract = IpcContract<
+  "orix:migration.ospos.import",
+  OspoMigrationImportPayload,
+  OspoMigrationImportResultDto,
+  MigrationIpcError
 >;
 
 export type AuthStatusContract = IpcContract<
@@ -1147,12 +1417,78 @@ export type PurchaseCancelContract = IpcContract<
   SupplierIpcError
 >;
 
+export type SaleListContract = IpcContract<
+  "orix:sales.list",
+  SaleListRequest,
+  SalePageDto,
+  SaleIpcError
+>;
+
+export type SaleGetContract = IpcContract<
+  "orix:sales.get",
+  { readonly id: string },
+  SaleDetailDto | undefined,
+  SaleIpcError
+>;
+
+export type SaleSaveDraftContract = IpcContract<
+  "orix:sales.save-draft",
+  SaleWritePayload,
+  { readonly sale: SaleDetailDto; readonly receipt: ReceiptDto | null },
+  SaleIpcError
+>;
+
+export type SaleHoldContract = IpcContract<
+  "orix:sales.hold",
+  SaleWritePayload,
+  { readonly sale: SaleDetailDto; readonly receipt: ReceiptDto | null },
+  SaleIpcError
+>;
+
+export type SaleCompleteContract = IpcContract<
+  "orix:sales.complete",
+  SaleWritePayload,
+  { readonly sale: SaleDetailDto; readonly receipt: ReceiptDto | null },
+  SaleIpcError
+>;
+
+export type SaleCancelContract = IpcContract<
+  "orix:sales.cancel",
+  { readonly id: string; readonly reason: string },
+  { readonly cancelled: true },
+  SaleIpcError
+>;
+
+export type SaleReceiptContract = IpcContract<
+  "orix:sales.receipt",
+  { readonly saleId: string },
+  ReceiptDto,
+  SaleIpcError
+>;
+
+export type CashRegisterContract = IpcContract<
+  "orix:cash-register.summary",
+  Record<string, never>,
+  CashRegisterDto,
+  SaleIpcError
+>;
+
+export type SalesDashboardContract = IpcContract<
+  "orix:sales.dashboard",
+  Record<string, never>,
+  SalesDashboardDto,
+  SaleIpcError
+>;
+
 export type OrixIpcContract =
   | SystemHealthContract
   | AppContextContract
   | DashboardGetContract
   | SettingsGetContract
   | SettingsSaveContract
+  | OspoMigrationSelectFilesContract
+  | OspoMigrationPreviewContract
+  | OspoMigrationImportContract
   | AuthStatusContract
   | SetupStoreContract
   | LoginContract
@@ -1188,6 +1524,15 @@ export type OrixIpcContract =
   | PurchaseSaveDraftContract
   | PurchaseReceiveContract
   | PurchaseCancelContract
+  | SaleListContract
+  | SaleGetContract
+  | SaleSaveDraftContract
+  | SaleHoldContract
+  | SaleCompleteContract
+  | SaleCancelContract
+  | SaleReceiptContract
+  | CashRegisterContract
+  | SalesDashboardContract
   | ProductListContract
   | ProductGetContract
   | ProductSaveContract

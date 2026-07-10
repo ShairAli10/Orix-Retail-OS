@@ -74,6 +74,9 @@ importers:
       '@orix/electron':
         specifier: workspace:*
         version: link:../../packages/electron
+      '@orix/migration':
+        specifier: workspace:*
+        version: link:../../packages/migration
       '@orix/repositories':
         specifier: workspace:*
         version: link:../../packages/repositories
@@ -175,6 +178,8 @@ importers:
       '@orix/shared':
         specifier: workspace:*
         version: link:../shared
+
+  packages/migration: {}
 
   packages/printer:
     dependencies:

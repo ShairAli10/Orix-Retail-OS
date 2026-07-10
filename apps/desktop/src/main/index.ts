@@ -15,9 +15,11 @@ import {
   InventoryManagementApplicationService,
   PurchaseManagementApplicationService,
   ProductManagementApplicationService,
+  SaleManagementApplicationService,
   SupplierManagementApplicationService
 } from "@orix/application";
 import { createDatabaseConnection, runMigrations, type DatabaseConnection } from "@orix/database";
+import { createOspoMigrationPreview, type OrixProductImportCandidate } from "@orix/migration";
 import type {
   AppContextContract,
   AppIpcError,
@@ -57,6 +59,10 @@ import type {
   PurchaseSaveDraftContract,
   SettingsGetContract,
   SettingsSaveContract,
+  OspoMigrationImportContract,
+  OspoMigrationImportResultDto,
+  OspoMigrationPreviewContract,
+  OspoMigrationSelectFilesContract,
   LoginContract,
   LockContract,
   LogoutContract,
@@ -70,6 +76,16 @@ import type {
   PermissionCode,
   ResetSecretPayload,
   RoleName,
+  CashRegisterContract,
+  SaleCancelContract,
+  SaleCompleteContract,
+  SaleGetContract,
+  SaleHoldContract,
+  SaleIpcError,
+  SaleListContract,
+  SaleReceiptContract,
+  SaleSaveDraftContract,
+  SalesDashboardContract,
   SetupStorePayload,
   SupplierActivityContract,
   SupplierArchiveContract,
@@ -81,12 +97,12 @@ import type {
   SupplierSaveContract,
   SupplierStatementContract
 } from "@orix/electron";
-import { createRepositories } from "@orix/repositories";
+import { createRepositories, type CatalogItem, type RepositoryFactory } from "@orix/repositories";
 import { err as ipcErr, ok as ipcOk, type Result } from "@orix/shared";
 import type * as Electron from "electron";
 import type { BrowserWindow as BrowserWindowType } from "electron";
 
-type ElectronMainRuntime = Pick<typeof Electron, "app" | "BrowserWindow" | "ipcMain">;
+type ElectronMainRuntime = Pick<typeof Electron, "app" | "BrowserWindow" | "dialog" | "ipcMain">;
 
 const electronRuntime = (
   globalThis as typeof globalThis & {
@@ -98,18 +114,20 @@ if (electronRuntime === undefined) {
   throw new Error("Electron runtime was not initialized.");
 }
 
-const { app, BrowserWindow, ipcMain } = electronRuntime;
+const { app, BrowserWindow, dialog, ipcMain } = electronRuntime;
 
 const isSmokeRun = process.argv.includes("--smoke");
 const settingsEffectiveAt = "1970-01-01T00:00:00.000Z";
 
 type AppState = {
   readonly connection: DatabaseConnection;
+  readonly repositories: RepositoryFactory;
   readonly productService: ProductManagementApplicationService;
   readonly inventoryService: InventoryManagementApplicationService;
   readonly customerService: CustomerManagementApplicationService;
   readonly supplierService: SupplierManagementApplicationService;
   readonly purchaseService: PurchaseManagementApplicationService;
+  readonly saleService: SaleManagementApplicationService;
   readonly storeId: string;
   readonly branchId: string;
   readonly businessDayId: string;
@@ -193,6 +211,10 @@ const allPermissions = [
   "purchases.receive",
   "purchases.cancel",
   "sales.view",
+  "sales.create",
+  "sales.complete",
+  "sales.cancel",
+  "sales.print",
   "expenses.view",
   "reports.view",
   "settings.view",
@@ -213,6 +235,10 @@ const rolePermissionMap = {
     "customers.payments",
     "suppliers.view",
     "sales.view",
+    "sales.create",
+    "sales.complete",
+    "sales.cancel",
+    "sales.print",
     "about.view"
   ],
   "Inventory Manager": [
@@ -231,6 +257,7 @@ const rolePermissionMap = {
     "purchases.edit",
     "purchases.receive",
     "purchases.cancel",
+    "sales.view",
     "about.view"
   ],
   Accountant: [
@@ -242,6 +269,7 @@ const rolePermissionMap = {
     "expenses.view",
     "reports.view",
     "sales.view",
+    "sales.print",
     "purchases.view",
     "about.view"
   ],
@@ -401,14 +429,21 @@ const initializeAppState = (): AppState => {
     transactionRunner: new SqliteTransactionRunner(connection),
     eventPublisher: new PersistedEventPublisher(connection)
   });
+  const saleService = new SaleManagementApplicationService({
+    repositories,
+    transactionRunner: new SqliteTransactionRunner(connection),
+    eventPublisher: new PersistedEventPublisher(connection)
+  });
 
   return {
     connection,
+    repositories,
     productService,
     inventoryService,
     customerService,
     supplierService,
     purchaseService,
+    saleService,
     ...bootstrap,
     locked: true,
     rememberedUsername: readRememberedUsername(connection, bootstrap.storeId)
@@ -924,6 +959,9 @@ const toCustomerIpc = <T>(result: CoreResult<T>): Result<T, CustomerIpcError> =>
 const toSupplierIpc = <T>(result: CoreResult<T>): Result<T, SupplierIpcError> =>
   result.ok ? ipcOk(result.value) : ipcErr(customerError(result.error));
 
+const toSaleIpc = <T>(result: CoreResult<T>): Result<T, SaleIpcError> =>
+  result.ok ? ipcOk(result.value) : ipcErr(customerError(result.error));
+
 const appError = (message: string): AppIpcError => ({
   code: "APP_OPERATION_FAILED",
   message
@@ -932,6 +970,9 @@ const appError = (message: string): AppIpcError => ({
 const appOk = <T>(value: T): Result<T, AppIpcError> => ipcOk(value);
 
 const appFail = <T>(message: string): Result<T, AppIpcError> => ipcErr(appError(message));
+
+const migrationFail = <T>(message: string, code = "MIGRATION_OPERATION_FAILED") =>
+  ipcErr({ code, message }) as Result<T, { readonly code: string; readonly message: string }>;
 
 const moneyAmount = (connection: DatabaseConnection, sql: string, ...params: readonly string[]) =>
   (connection.sqlite.prepare(sql).get(...params) as MoneyRow | undefined)?.amount ?? 0;
@@ -1377,8 +1418,15 @@ const registerAppHandlers = (state: AppState): void => {
         return appFail("Sign in is required.");
       }
       const store = state.connection.sqlite
-        .prepare("SELECT name FROM stores WHERE id = ?")
-        .get(state.storeId) as { readonly name: string } | undefined;
+        .prepare("SELECT name, phone, email, address FROM stores WHERE id = ?")
+        .get(state.storeId) as
+        | {
+            readonly name: string;
+            readonly phone: string | null;
+            readonly email: string | null;
+            readonly address: string | null;
+          }
+        | undefined;
       const branch = state.connection.sqlite
         .prepare("SELECT name FROM branches WHERE id = ?")
         .get(state.branchId) as { readonly name: string } | undefined;
@@ -1392,6 +1440,9 @@ const registerAppHandlers = (state: AppState): void => {
 
       return appOk({
         storeName: store?.name ?? defaultSettings.storeDisplayName,
+        storePhone: store?.phone ?? null,
+        storeEmail: store?.email ?? null,
+        storeAddress: store?.address ?? null,
         storeLogoDataUrl: storeProfile(state.connection, state.storeId).logoDataUrl,
         businessDayStatus: day?.status ?? "closed",
         currentUser: user?.name ?? "Owner",
@@ -1745,6 +1796,316 @@ const registerInventoryHandlers = (state: AppState): void => {
   );
 };
 
+const registerMigrationHandlers = (state: AppState): void => {
+  ipcMain.handle(
+    "orix:migration.ospos.select-files",
+    async (): Promise<OspoMigrationSelectFilesContract["response"]> => {
+      if (!can(state, "settings.manage")) {
+        return migrationFail("You do not have permission to run migrations.", "MIGRATION_DENIED");
+      }
+      const result = await dialog.showOpenDialog({
+        title: "Select OSPOS export files",
+        properties: ["openFile", "multiSelections"],
+        filters: [
+          { name: "OSPOS exports", extensions: ["csv", "sql"] },
+          { name: "All files", extensions: ["*"] }
+        ]
+      });
+      if (result.canceled) {
+        return ipcOk({ itemsFile: null, sqlFile: null });
+      }
+      const itemsFile =
+        result.filePaths.find((filePath) => filePath.toLowerCase().endsWith("ospos_items.csv")) ??
+        result.filePaths.find((filePath) => filePath.toLowerCase().endsWith(".csv")) ??
+        null;
+      const sqlFile =
+        result.filePaths.find((filePath) => filePath.toLowerCase().endsWith(".sql")) ?? null;
+      return ipcOk({ itemsFile, sqlFile });
+    }
+  );
+
+  ipcMain.handle(
+    "orix:migration.ospos.preview",
+    async (
+      _event,
+      request: OspoMigrationPreviewContract["request"]
+    ): Promise<OspoMigrationPreviewContract["response"]> => {
+      if (!can(state, "settings.manage")) {
+        return migrationFail(
+          "You do not have permission to preview migrations.",
+          "MIGRATION_DENIED"
+        );
+      }
+      try {
+        const preview = await createOspoMigrationPreview({
+          itemsFile: request.payload.itemsFile,
+          ...(request.payload.sqlFile === undefined ? {} : { sqlFile: request.payload.sqlFile }),
+          sampleSize: 12
+        });
+        return ipcOk({
+          generatedAt: preview.generatedAt,
+          source: preview.source,
+          store: preview.store,
+          totals: preview.totals,
+          issues: preview.issues,
+          sampleProducts: preview.sampleProducts
+        });
+      } catch {
+        return migrationFail("Unable to read OSPOS files.", "MIGRATION_PREVIEW_FAILED");
+      }
+    }
+  );
+
+  ipcMain.handle(
+    "orix:migration.ospos.import",
+    async (
+      _event,
+      request: OspoMigrationImportContract["request"]
+    ): Promise<OspoMigrationImportContract["response"]> => {
+      if (!can(state, "settings.manage")) {
+        return migrationFail("You do not have permission to import data.", "MIGRATION_DENIED");
+      }
+      try {
+        const preview = await createOspoMigrationPreview({
+          itemsFile: request.payload.itemsFile,
+          sqlFile: request.payload.sqlFile
+        });
+        return ipcOk(await importOspoProductsAndStock(state, preview, request.payload.mode));
+      } catch {
+        return migrationFail("Unable to import OSPOS products and inventory.", "MIGRATION_FAILED");
+      }
+    }
+  );
+};
+
+const importOspoProductsAndStock = async (
+  state: AppState,
+  preview: Awaited<ReturnType<typeof createOspoMigrationPreview>>,
+  mode: "valid-only" | "strict"
+): Promise<OspoMigrationImportResultDto> => {
+  const timestamp = new Date().toISOString();
+  const blockingByItemId = blockingIssuesByItemId(preview.issues);
+  const globalBlockingIssues = preview.issues.filter(
+    (issue) => issue.severity === "error" && issue.itemId === undefined
+  );
+  if (mode === "strict" && preview.issues.some((issue) => issue.severity === "error")) {
+    throw new Error("OSPOS preview has blocking errors.");
+  }
+  if (globalBlockingIssues.length > 0) {
+    throw new Error("OSPOS preview is missing required data.");
+  }
+
+  const catalog = state.repositories.productManagement.getCatalog(state.storeId, true);
+  if (!catalog.ok) {
+    throw new Error(catalog.error.message);
+  }
+  const categoryByName = catalogMap(catalog.value.categories);
+  const unitByName = catalogMap(catalog.value.units);
+  const seenNames = new Set<string>();
+  const seenBarcodes = new Set<string>();
+  const skippedProducts: {
+    sourceItemId: string;
+    name: string;
+    reason: string;
+  }[] = [];
+  let createdCategories = 0;
+  let createdUnits = 0;
+  let createdProducts = 0;
+  let openingStockTransactions = 0;
+
+  state.connection.sqlite.prepare("BEGIN IMMEDIATE").run();
+  try {
+    for (const product of preview.products) {
+      const skipReason = migrationSkipReason(
+        state,
+        product,
+        blockingByItemId,
+        seenNames,
+        seenBarcodes
+      );
+      if (skipReason !== null) {
+        skippedProducts.push({
+          sourceItemId: product.sourceItemId,
+          name: product.name,
+          reason: skipReason
+        });
+        continue;
+      }
+
+      const category = ensureCatalogItem(state, categoryByName, "category", product.categoryName);
+      if (category.created) createdCategories += 1;
+      const unit = ensureCatalogItem(state, unitByName, "unit", product.unitName);
+      if (unit.created) createdUnits += 1;
+
+      const productId = randomUUID();
+      const created = state.repositories.productManagement.createProduct({
+        id: productId,
+        storeId: state.storeId,
+        categoryId: category.item.id,
+        brandId: null,
+        unitId: unit.item.id,
+        name: product.name,
+        barcode: product.barcode,
+        description: product.description,
+        purchasePriceMinor: product.purchasePriceMinor,
+        salePriceMinor: product.salePriceMinor,
+        minimumStock: product.minimumStock,
+        active: true,
+        userId: state.userId,
+        timestamp
+      });
+      if (!created.ok) {
+        throw new Error(created.error.message);
+      }
+
+      const openingStock = state.repositories.productManagement.createOpeningStock(
+        productId,
+        {
+          storeId: state.storeId,
+          categoryId: category.item.id,
+          brandId: null,
+          unitId: unit.item.id,
+          name: product.name,
+          barcode: product.barcode,
+          description: product.description,
+          purchasePriceMinor: product.purchasePriceMinor,
+          salePriceMinor: product.salePriceMinor,
+          minimumStock: product.minimumStock,
+          active: true,
+          userId: state.userId,
+          timestamp
+        },
+        product.openingStock,
+        state.branchId,
+        state.businessDayId
+      );
+      if (!openingStock.ok) {
+        throw new Error(openingStock.error.message);
+      }
+
+      createdProducts += 1;
+      if (product.openingStock > 0) openingStockTransactions += 1;
+      seenNames.add(product.name.toLocaleLowerCase());
+      if (product.barcode !== null) seenBarcodes.add(product.barcode);
+    }
+    state.connection.sqlite.prepare("COMMIT").run();
+  } catch (cause) {
+    state.connection.sqlite.prepare("ROLLBACK").run();
+    throw cause;
+  }
+
+  await new PersistedEventPublisher(state.connection).publish({
+    id: randomUUID(),
+    kind: "domain",
+    name: "OspoMigrationImported",
+    version: 1,
+    occurredAt: timestamp,
+    payload: {
+      entityId: state.storeId,
+      createdProducts,
+      openingStockTransactions,
+      skippedProducts: skippedProducts.length
+    },
+    metadata: { storeId: state.storeId, actorId: state.userId }
+  });
+
+  return {
+    importedAt: timestamp,
+    createdCategories,
+    createdUnits,
+    createdProducts,
+    openingStockTransactions,
+    skippedProducts
+  };
+};
+
+const blockingIssuesByItemId = (
+  issues: readonly { readonly severity: string; readonly itemId?: string }[]
+): ReadonlyMap<string, string> => {
+  const map = new Map<string, string>();
+  for (const issue of issues) {
+    if (issue.severity === "error" && issue.itemId !== undefined) {
+      map.set(issue.itemId, issue.itemId);
+    }
+  }
+  return map;
+};
+
+const catalogMap = (items: readonly CatalogItem[]): Map<string, CatalogItem> => {
+  const map = new Map<string, CatalogItem>();
+  for (const item of items) {
+    map.set(item.name.toLocaleLowerCase(), item);
+  }
+  return map;
+};
+
+const ensureCatalogItem = (
+  state: AppState,
+  catalog: Map<string, CatalogItem>,
+  kind: "category" | "unit",
+  name: string
+): { readonly item: CatalogItem; readonly created: boolean } => {
+  const key = name.toLocaleLowerCase();
+  const existing = catalog.get(key);
+  if (existing !== undefined) {
+    return { item: existing, created: false };
+  }
+  const payload =
+    kind === "unit"
+      ? {
+          storeId: state.storeId,
+          name,
+          abbreviation: name,
+          userId: state.userId,
+          timestamp: new Date().toISOString()
+        }
+      : {
+          storeId: state.storeId,
+          name,
+          userId: state.userId,
+          timestamp: new Date().toISOString()
+        };
+  const created = state.repositories.productManagement.createCatalogItem(kind, payload);
+  if (!created.ok) {
+    throw new Error(created.error.message);
+  }
+  catalog.set(key, created.value);
+  return { item: created.value, created: true };
+};
+
+const migrationSkipReason = (
+  state: AppState,
+  product: OrixProductImportCandidate,
+  blockingByItemId: ReadonlyMap<string, string>,
+  seenNames: ReadonlySet<string>,
+  seenBarcodes: ReadonlySet<string>
+): string | null => {
+  if (product.archived) return "Source item is archived.";
+  if (blockingByItemId.has(product.sourceItemId))
+    return "Source item has blocking validation errors.";
+  if (product.openingStock < 0) return "Source item has negative stock.";
+  const normalizedName = product.name.toLocaleLowerCase();
+  if (seenNames.has(normalizedName)) return "Duplicate product name in source import.";
+  if (product.barcode !== null && seenBarcodes.has(product.barcode)) {
+    return "Duplicate barcode in source import.";
+  }
+  const existingName = state.repositories.productManagement.productNameExists(
+    state.storeId,
+    product.name
+  );
+  if (!existingName.ok) throw new Error(existingName.error.message);
+  if (existingName.value) return "Product name already exists in Orix.";
+  if (product.barcode !== null) {
+    const existingBarcode = state.repositories.productManagement.barcodeExists(
+      state.storeId,
+      product.barcode
+    );
+    if (!existingBarcode.ok) throw new Error(existingBarcode.error.message);
+    if (existingBarcode.value) return "Barcode already exists in Orix.";
+  }
+  return null;
+};
+
 const can = (state: AppState, permission: PermissionCode): boolean =>
   permissionsForUser(state.connection, state.storeId, state.userId).includes(permission);
 
@@ -2062,6 +2423,89 @@ const registerPurchaseHandlers = (state: AppState): void => {
   );
 };
 
+const salePermissionDenied = <T>(
+  message = "You do not have permission for this action."
+): Result<T, SaleIpcError> => ipcErr({ code: "SALE_PERMISSION_DENIED", message });
+
+const saleInput = (payload: SaleSaveDraftContract["request"]["payload"], state: AppState) => ({
+  ...payload,
+  storeId: state.storeId,
+  branchId: state.branchId,
+  businessDayId: state.businessDayId,
+  userId: state.userId
+});
+
+const registerSaleHandlers = (state: AppState): void => {
+  ipcMain.handle("orix:sales.list", (_event, request: SaleListContract["request"]) => {
+    if (!can(state, "sales.view")) return salePermissionDenied();
+    return toSaleIpc(
+      state.saleService.listSales({
+        ...request.payload,
+        storeId: state.storeId,
+        page: Math.max(1, request.payload.page),
+        pageSize: Math.max(1, request.payload.pageSize)
+      })
+    );
+  });
+
+  ipcMain.handle("orix:sales.get", (_event, request: SaleGetContract["request"]) => {
+    if (!can(state, "sales.view")) return salePermissionDenied();
+    return toSaleIpc(state.saleService.getSale(request.payload.id));
+  });
+
+  ipcMain.handle(
+    "orix:sales.save-draft",
+    async (_event, request: SaleSaveDraftContract["request"]) => {
+      if (!can(state, "sales.create")) return salePermissionDenied();
+      return toSaleIpc(await state.saleService.saveDraft(saleInput(request.payload, state)));
+    }
+  );
+
+  ipcMain.handle("orix:sales.hold", async (_event, request: SaleHoldContract["request"]) => {
+    if (!can(state, "sales.create")) return salePermissionDenied();
+    return toSaleIpc(await state.saleService.holdSale(saleInput(request.payload, state)));
+  });
+
+  ipcMain.handle(
+    "orix:sales.complete",
+    async (_event, request: SaleCompleteContract["request"]) => {
+      if (!can(state, "sales.complete")) return salePermissionDenied();
+      return toSaleIpc(await state.saleService.completeSale(saleInput(request.payload, state)));
+    }
+  );
+
+  ipcMain.handle("orix:sales.cancel", async (_event, request: SaleCancelContract["request"]) => {
+    if (!can(state, "sales.cancel")) return salePermissionDenied();
+    return toSaleIpc(
+      await state.saleService
+        .cancelDraft({
+          id: request.payload.id,
+          reason: request.payload.reason,
+          storeId: state.storeId,
+          branchId: state.branchId,
+          businessDayId: state.businessDayId,
+          userId: state.userId
+        })
+        .then((result) => (result.ok ? ok({ cancelled: true as const }) : result))
+    );
+  });
+
+  ipcMain.handle("orix:sales.receipt", (_event, request: SaleReceiptContract["request"]) => {
+    if (!can(state, "sales.print")) return salePermissionDenied();
+    return toSaleIpc(state.saleService.receipt(request.payload.saleId));
+  });
+
+  ipcMain.handle("orix:cash-register.summary", (): CashRegisterContract["response"] => {
+    if (!can(state, "pos.view")) return salePermissionDenied();
+    return toSaleIpc(state.saleService.cashRegisterSummary(state.businessDayId));
+  });
+
+  ipcMain.handle("orix:sales.dashboard", (): SalesDashboardContract["response"] => {
+    if (!can(state, "dashboard.view")) return salePermissionDenied();
+    return toSaleIpc(state.saleService.dashboardSummary(state.storeId, state.businessDayId));
+  });
+};
+
 const toCatalogWriteInput = (payload: CatalogWritePayload, state: AppState) => ({
   ...payload,
   storeId: state.storeId,
@@ -2090,7 +2534,9 @@ void app.whenReady().then(() => {
   registerCustomerHandlers(appState);
   registerSupplierHandlers(appState);
   registerPurchaseHandlers(appState);
+  registerSaleHandlers(appState);
   registerInventoryHandlers(appState);
+  registerMigrationHandlers(appState);
   registerProductHandlers(appState);
   createMainWindow();
 

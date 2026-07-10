@@ -21,6 +21,9 @@
       "path": "../../packages/electron"
     },
     {
+      "path": "../../packages/migration"
+    },
+    {
       "path": "../../packages/repositories"
     },
     {

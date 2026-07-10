@@ -14,6 +14,7 @@
     "@orix/core": "workspace:*",
     "@orix/database": "workspace:*",
     "@orix/electron": "workspace:*",
+    "@orix/migration": "workspace:*",
     "@orix/repositories": "workspace:*",
     "@orix/shared": "workspace:*",
     "@orix/ui": "workspace:*",

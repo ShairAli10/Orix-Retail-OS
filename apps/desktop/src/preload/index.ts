@@ -45,9 +45,25 @@ import type {
   PurchaseReceiveContract,
   PurchaseSaveDraftContract,
   PurchaseWritePayload,
+  CashRegisterContract,
+  SaleCancelContract,
+  SaleCompleteContract,
+  SaleGetContract,
+  SaleHoldContract,
+  SaleListContract,
+  SaleListRequest,
+  SaleReceiptContract,
+  SaleSaveDraftContract,
+  SaleWritePayload,
+  SalesDashboardContract,
   SettingsGetContract,
   SettingsSaveContract,
   AppSettingsDto,
+  OspoMigrationImportContract,
+  OspoMigrationImportPayload,
+  OspoMigrationPreviewContract,
+  OspoMigrationPreviewPayload,
+  OspoMigrationSelectFilesContract,
   LoginContract,
   LoginPayload,
   LockContract,
@@ -224,6 +240,30 @@ const purchasesApi = {
     request<PurchaseCancelContract["response"]>("orix:purchases.cancel", { id, reason })
 };
 
+const salesApi = {
+  list: (payload: SaleListRequest): Promise<SaleListContract["response"]> =>
+    request<SaleListContract["response"]>("orix:sales.list", payload),
+  get: (id: string): Promise<SaleGetContract["response"]> =>
+    request<SaleGetContract["response"]>("orix:sales.get", { id }),
+  saveDraft: (payload: SaleWritePayload): Promise<SaleSaveDraftContract["response"]> =>
+    request<SaleSaveDraftContract["response"]>("orix:sales.save-draft", payload),
+  hold: (payload: SaleWritePayload): Promise<SaleHoldContract["response"]> =>
+    request<SaleHoldContract["response"]>("orix:sales.hold", payload),
+  complete: (payload: SaleWritePayload): Promise<SaleCompleteContract["response"]> =>
+    request<SaleCompleteContract["response"]>("orix:sales.complete", payload),
+  cancel: (id: string, reason: string): Promise<SaleCancelContract["response"]> =>
+    request<SaleCancelContract["response"]>("orix:sales.cancel", { id, reason }),
+  receipt: (saleId: string): Promise<SaleReceiptContract["response"]> =>
+    request<SaleReceiptContract["response"]>("orix:sales.receipt", { saleId }),
+  dashboard: (): Promise<SalesDashboardContract["response"]> =>
+    request<SalesDashboardContract["response"]>("orix:sales.dashboard", {})
+};
+
+const cashRegisterApi = {
+  summary: (): Promise<CashRegisterContract["response"]> =>
+    request<CashRegisterContract["response"]>("orix:cash-register.summary", {})
+};
+
 const dashboardApi = {
   get: (): Promise<DashboardGetContract["response"]> =>
     request<DashboardGetContract["response"]>("orix:dashboard.get", {})
@@ -234,6 +274,19 @@ const settingsApi = {
     request<SettingsGetContract["response"]>("orix:settings.get", {}),
   save: (payload: AppSettingsDto): Promise<SettingsSaveContract["response"]> =>
     request<SettingsSaveContract["response"]>("orix:settings.save", payload)
+};
+
+const migrationApi = {
+  selectOspoFiles: (): Promise<OspoMigrationSelectFilesContract["response"]> =>
+    request<OspoMigrationSelectFilesContract["response"]>("orix:migration.ospos.select-files", {}),
+  previewOspo: (
+    payload: OspoMigrationPreviewPayload
+  ): Promise<OspoMigrationPreviewContract["response"]> =>
+    request<OspoMigrationPreviewContract["response"]>("orix:migration.ospos.preview", payload),
+  importOspo: (
+    payload: OspoMigrationImportPayload
+  ): Promise<OspoMigrationImportContract["response"]> =>
+    request<OspoMigrationImportContract["response"]>("orix:migration.ospos.import", payload)
 };
 
 const inventoryApi = {
@@ -256,12 +309,15 @@ const inventoryApi = {
 contextBridge.exposeInMainWorld("orix", {
   app: appApi,
   auth: authApi,
+  cashRegister: cashRegisterApi,
   customers: customersApi,
   dashboard: dashboardApi,
   inventory: inventoryApi,
+  migration: migrationApi,
   settings: settingsApi,
   products: productApi,
   purchases: purchasesApi,
+  sales: salesApi,
   suppliers: suppliersApi,
   users: usersApi
 });
@@ -269,12 +325,15 @@ contextBridge.exposeInMainWorld("orix", {
 export type OrixPreloadApi = {
   readonly app: typeof appApi;
   readonly auth: typeof authApi;
+  readonly cashRegister: typeof cashRegisterApi;
   readonly customers: typeof customersApi;
   readonly dashboard: typeof dashboardApi;
   readonly inventory: typeof inventoryApi;
+  readonly migration: typeof migrationApi;
   readonly settings: typeof settingsApi;
   readonly products: typeof productApi;
   readonly purchases: typeof purchasesApi;
+  readonly sales: typeof salesApi;
   readonly suppliers: typeof suppliersApi;
   readonly users: typeof usersApi;
 };

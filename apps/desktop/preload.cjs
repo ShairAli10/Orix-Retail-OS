@@ -70,6 +70,21 @@ const purchases = {
   cancel: (id, reason) => request("orix:purchases.cancel", { id, reason })
 };
 
+const sales = {
+  list: (payload) => request("orix:sales.list", payload),
+  get: (id) => request("orix:sales.get", { id }),
+  saveDraft: (payload) => request("orix:sales.save-draft", payload),
+  hold: (payload) => request("orix:sales.hold", payload),
+  complete: (payload) => request("orix:sales.complete", payload),
+  cancel: (id, reason) => request("orix:sales.cancel", { id, reason }),
+  receipt: (saleId) => request("orix:sales.receipt", { saleId }),
+  dashboard: () => request("orix:sales.dashboard", {})
+};
+
+const cashRegister = {
+  summary: () => request("orix:cash-register.summary", {})
+};
+
 const dashboard = {
   get: () => request("orix:dashboard.get", {})
 };
@@ -87,17 +102,26 @@ const inventory = {
   openingStock: (payload) => request("orix:inventory.opening-stock", payload)
 };
 
+const migration = {
+  selectOspoFiles: () => request("orix:migration.ospos.select-files", {}),
+  previewOspo: (payload) => request("orix:migration.ospos.preview", payload),
+  importOspo: (payload) => request("orix:migration.ospos.import", payload)
+};
+
 contextBridge.exposeInMainWorld("orix", {
   app: {
     context: () => request("orix:app.context", {})
   },
   auth,
+  cashRegister,
   customers,
   dashboard,
   inventory,
+  migration,
   settings,
   products,
   purchases,
+  sales,
   suppliers,
   users
 });

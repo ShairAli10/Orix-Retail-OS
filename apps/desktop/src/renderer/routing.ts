@@ -18,19 +18,83 @@ export const routes: readonly {
   readonly icon: string;
   readonly path: string;
   readonly section: "main" | "operations" | "system";
+  readonly ready: boolean;
 }[] = [
-  { id: "dashboard", label: "Dashboard", icon: "⌘", path: "/", section: "main" },
-  { id: "pos", label: "POS", icon: "▣", path: "/pos", section: "operations" },
-  { id: "inventory", label: "Inventory", icon: "▦", path: "/inventory", section: "operations" },
-  { id: "products", label: "Products", icon: "◇", path: "/products", section: "operations" },
-  { id: "customers", label: "Customers", icon: "●", path: "/customers", section: "operations" },
-  { id: "suppliers", label: "Suppliers", icon: "◆", path: "/suppliers", section: "operations" },
-  { id: "purchases", label: "Purchases", icon: "＋", path: "/purchases", section: "operations" },
-  { id: "sales", label: "Sales", icon: "↗", path: "/sales", section: "operations" },
-  { id: "expenses", label: "Expenses", icon: "−", path: "/expenses", section: "operations" },
-  { id: "reports", label: "Reports", icon: "▤", path: "/reports", section: "operations" },
-  { id: "settings", label: "Settings", icon: "⚙", path: "/settings", section: "system" },
-  { id: "about", label: "About", icon: "ⓘ", path: "/about", section: "system" }
+  { id: "pos", label: "Sell", icon: "RS", path: "/pos", section: "main", ready: true },
+  { id: "dashboard", label: "Home", icon: "HM", path: "/", section: "main", ready: true },
+  {
+    id: "customers",
+    label: "Customer Book",
+    icon: "CB",
+    path: "/customers",
+    section: "main",
+    ready: true
+  },
+  {
+    id: "products",
+    label: "Items",
+    icon: "IT",
+    path: "/products",
+    section: "operations",
+    ready: true
+  },
+  {
+    id: "inventory",
+    label: "Stock",
+    icon: "ST",
+    path: "/inventory",
+    section: "operations",
+    ready: true
+  },
+  {
+    id: "suppliers",
+    label: "Suppliers",
+    icon: "SP",
+    path: "/suppliers",
+    section: "operations",
+    ready: true
+  },
+  {
+    id: "purchases",
+    label: "Buy Stock",
+    icon: "PO",
+    path: "/purchases",
+    section: "operations",
+    ready: true
+  },
+  {
+    id: "sales",
+    label: "Sales History",
+    icon: "SL",
+    path: "/sales",
+    section: "operations",
+    ready: true
+  },
+  {
+    id: "expenses",
+    label: "Expenses",
+    icon: "EX",
+    path: "/expenses",
+    section: "operations",
+    ready: false
+  },
+  {
+    id: "reports",
+    label: "Reports",
+    icon: "RP",
+    path: "/reports",
+    section: "operations",
+    ready: false
+  },
+  {
+    id: "settings",
+    label: "Settings",
+    icon: "SE",
+    path: "/settings",
+    section: "system",
+    ready: true
+  },
+  { id: "about", label: "About", icon: "IN", path: "/about", section: "system", ready: true }
 ];
 
 export const routeFromPath = (path: string): RouteId =>

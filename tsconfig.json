@@ -29,6 +29,9 @@
       "path": "./packages/ledger"
     },
     {
+      "path": "./packages/migration"
+    },
+    {
       "path": "./packages/printer"
     },
     {
