@@ -89,6 +89,10 @@ const dashboard = {
   get: () => request("orix:dashboard.get", {})
 };
 
+const reports = {
+  summary: (payload) => request("orix:reports.summary", payload)
+};
+
 const settings = {
   get: () => request("orix:settings.get", {}),
   save: (payload) => request("orix:settings.save", payload)
@@ -129,6 +133,7 @@ contextBridge.exposeInMainWorld("orix", {
   inventory,
   migration,
   settings,
+  reports,
   products,
   purchases,
   sales,

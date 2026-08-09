@@ -14,4 +14,8 @@ describe("desktop shell routing", () => {
   it("defines every route with a stable path", () => {
     expect(routes.every((route) => pathForRoute(route.id).startsWith("/"))).toBe(true);
   });
+
+  it("enables reports as a production route", () => {
+    expect(routes.find((route) => route.id === "reports")?.ready).toBe(true);
+  });
 });

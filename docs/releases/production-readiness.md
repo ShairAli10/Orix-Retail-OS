@@ -40,7 +40,7 @@ packaging, and Windows-specific checks remain incomplete.
 | Ledger            | Partial         | Ledger-derived balances exist through workflows. Needs ledger review screen and consistency diagnostics.                                                              |
 | Expenses          | Missing/Partial | Expense domain exists in architecture; production workflow still needs completion and UI review.                                                                      |
 | Reports           | Missing         | Dashboards exist, but formal printable/exportable reports are not complete.                                                                                           |
-| Backup            | Missing/Partial | Architecture exists; customer-facing one-click backup/restore is a release blocker.                                                                                   |
+| Backup            | Partial         | One-click backup, verification, restore confirmation, and backup-before-import exist. Needs scheduler, retention, and restore-preview hardening.                      |
 | Legacy import     | Partial         | Previous software stock import exists. Needs rollback report, backup-before-import, and more sample formats.                                                          |
 | Windows installer | Missing         | Must be implemented and tested on Windows before beta.                                                                                                                |
 | Documentation     | Partial         | Architecture docs are strong. Customer/admin docs are missing.                                                                                                        |
@@ -354,6 +354,5 @@ Version 1.0 requires beta criteria plus:
 
 ## Current Recommendation
 
-The next implementation phase should be Backup and Restore. Data recovery must come before broader
-beta testing, old-software migrations, and real shop onboarding. Once backup and restore are proven,
-the next highest-value work is Reports MVP, followed by POS production hardening.
+Backup and Restore has a usable customer-facing foundation. The current implementation phase is
+Reports MVP, followed by POS production hardening.

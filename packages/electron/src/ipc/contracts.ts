@@ -443,6 +443,94 @@ export type DashboardDto = {
   readonly topSuppliers: readonly SupplierSummaryDto[];
 };
 
+export type ReportRequest = {
+  readonly dateFrom: string;
+  readonly dateTo: string;
+};
+
+export type DailySalesReportRowDto = {
+  readonly saleId: string;
+  readonly saleNumber: string;
+  readonly saleDate: string;
+  readonly customerName: string;
+  readonly itemCount: number;
+  readonly subtotalMinor: number;
+  readonly discountMinor: number;
+  readonly taxMinor: number;
+  readonly totalMinor: number;
+  readonly paidMinor: number;
+  readonly cashierName: string;
+};
+
+export type CashDrawerReportDto = {
+  readonly openingCashMinor: number;
+  readonly cashSalesMinor: number;
+  readonly customerCollectionsMinor: number;
+  readonly supplierPaymentsMinor: number;
+  readonly expectedCashMinor: number;
+  readonly sessionStatus: "open" | "closed" | "not-opened";
+};
+
+export type InventoryValueReportRowDto = {
+  readonly productId: string;
+  readonly barcode: string | null;
+  readonly productName: string;
+  readonly categoryName: string | null;
+  readonly currentStock: number;
+  readonly purchasePriceMinor: number;
+  readonly salePriceMinor: number;
+  readonly purchaseValueMinor: number;
+  readonly retailValueMinor: number;
+};
+
+export type LowStockReportRowDto = {
+  readonly productId: string;
+  readonly barcode: string | null;
+  readonly productName: string;
+  readonly categoryName: string | null;
+  readonly currentStock: number;
+  readonly minimumStock: number;
+  readonly needToOrder: number;
+};
+
+export type ReceivableReportRowDto = {
+  readonly customerId: string;
+  readonly customerName: string;
+  readonly phone: string | null;
+  readonly balanceMinor: number;
+  readonly creditLimitMinor: number;
+  readonly lastActivityAt: string | null;
+};
+
+export type PayableReportRowDto = {
+  readonly supplierId: string;
+  readonly supplierName: string;
+  readonly phone: string | null;
+  readonly balanceMinor: number;
+  readonly lastActivityAt: string | null;
+};
+
+export type ReportsSummaryDto = {
+  readonly generatedAt: string;
+  readonly dateFrom: string;
+  readonly dateTo: string;
+  readonly totals: {
+    readonly salesMinor: number;
+    readonly cashExpectedMinor: number;
+    readonly inventoryPurchaseValueMinor: number;
+    readonly inventoryRetailValueMinor: number;
+    readonly receivablesMinor: number;
+    readonly payablesMinor: number;
+    readonly lowStockCount: number;
+  };
+  readonly dailySales: readonly DailySalesReportRowDto[];
+  readonly cashDrawer: CashDrawerReportDto;
+  readonly inventoryValue: readonly InventoryValueReportRowDto[];
+  readonly lowStock: readonly LowStockReportRowDto[];
+  readonly receivables: readonly ReceivableReportRowDto[];
+  readonly payables: readonly PayableReportRowDto[];
+};
+
 export type CustomerStatusFilter = "active" | "archived" | "all";
 
 export type CustomerType = "walk-in" | "regular" | "wholesale" | "vip";
@@ -1568,6 +1656,13 @@ export type SalesDashboardContract = IpcContract<
   Record<string, never>,
   SalesDashboardDto,
   SaleIpcError
+>;
+
+export type ReportsSummaryContract = IpcContract<
+  "orix:reports.summary",
+  ReportRequest,
+  ReportsSummaryDto,
+  AppIpcError
 >;
 
 export type OrixIpcContract =

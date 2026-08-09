@@ -44,6 +44,7 @@ import type {
   PurchaseListRequest,
   PurchaseReceiveContract,
   PurchaseSaveDraftContract,
+  ReportsSummaryContract,
   PurchaseWritePayload,
   CashRegisterContract,
   SaleCancelContract,
@@ -275,6 +276,13 @@ const dashboardApi = {
     request<DashboardGetContract["response"]>("orix:dashboard.get", {})
 };
 
+const reportsApi = {
+  summary: (
+    payload: ReportsSummaryContract["request"]["payload"]
+  ): Promise<ReportsSummaryContract["response"]> =>
+    request<ReportsSummaryContract["response"]>("orix:reports.summary", payload)
+};
+
 const settingsApi = {
   get: (): Promise<SettingsGetContract["response"]> =>
     request<SettingsGetContract["response"]>("orix:settings.get", {}),
@@ -344,6 +352,7 @@ contextBridge.exposeInMainWorld("orix", {
   dashboard: dashboardApi,
   inventory: inventoryApi,
   migration: migrationApi,
+  reports: reportsApi,
   settings: settingsApi,
   products: productApi,
   purchases: purchasesApi,
@@ -361,6 +370,7 @@ export type OrixPreloadApi = {
   readonly dashboard: typeof dashboardApi;
   readonly inventory: typeof inventoryApi;
   readonly migration: typeof migrationApi;
+  readonly reports: typeof reportsApi;
   readonly settings: typeof settingsApi;
   readonly products: typeof productApi;
   readonly purchases: typeof purchasesApi;

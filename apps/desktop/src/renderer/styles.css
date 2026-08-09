@@ -948,6 +948,100 @@ p {
   letter-spacing: 0;
 }
 
+.toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.toolbar-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.report-filters {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(160px, 220px) auto;
+  align-items: end;
+  gap: 12px;
+  padding: 16px;
+}
+
+.report-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.report-summary-grid .metric-card {
+  min-height: 108px;
+}
+
+.report-summary-grid .metric-card strong {
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+
+.report-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.report-tabs button {
+  min-height: 38px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.report-tabs button.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+.report-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.report-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.report-title h2,
+.report-title p {
+  margin: 0;
+}
+
+.cash-report-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.cash-report-grid .metric-card {
+  min-height: 110px;
+}
+
+.cash-report-grid .metric-card strong {
+  font-size: 20px;
+}
+
+.report-table-wrap table {
+  min-width: 980px;
+}
+
 .dashboard-lower,
 .home-panels,
 .settings-grid {
@@ -2451,6 +2545,8 @@ tbody tr:hover {
   .metric-grid,
   .action-grid,
   .home-metrics,
+  .report-summary-grid,
+  .cash-report-grid,
   .settings-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2510,10 +2606,17 @@ tbody tr:hover {
   .backup-row {
     grid-template-columns: 1fr;
   }
+
+  .report-filters {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 @media (max-width: 760px) {
   .settings-grid,
+  .report-summary-grid,
+  .cash-report-grid,
+  .report-filters,
   .migration-steps,
   .migration-detection {
     grid-template-columns: 1fr;

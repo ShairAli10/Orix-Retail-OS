@@ -84,7 +84,7 @@ export const routes: readonly {
     icon: "RP",
     path: "/reports",
     section: "operations",
-    ready: false
+    ready: true
   },
   {
     id: "settings",

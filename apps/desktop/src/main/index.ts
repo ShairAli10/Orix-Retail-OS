@@ -65,6 +65,7 @@ import type {
   PurchaseListContract,
   PurchaseReceiveContract,
   PurchaseSaveDraftContract,
+  ReportsSummaryContract,
   SettingsGetContract,
   SettingsSaveContract,
   LegacyStockImportContract,
@@ -205,6 +206,53 @@ type RecentActivityRow = {
   readonly id: string;
   readonly name: string;
   readonly occurredAt: string;
+};
+
+type DailySalesReportRow = {
+  readonly saleId: string;
+  readonly saleNumber: string;
+  readonly saleDate: string;
+  readonly customerName: string | null;
+  readonly itemCount: number;
+  readonly subtotalMinor: number;
+  readonly discountMinor: number;
+  readonly taxMinor: number;
+  readonly totalMinor: number;
+  readonly paidMinor: number;
+  readonly cashierName: string | null;
+};
+
+type InventoryReportRow = {
+  readonly productId: string;
+  readonly barcode: string | null;
+  readonly productName: string;
+  readonly categoryName: string | null;
+  readonly currentStock: number | null;
+  readonly minimumStock: number | null;
+  readonly purchasePriceMinor: number | null;
+  readonly salePriceMinor: number | null;
+};
+
+type ReceivableReportRow = {
+  readonly customerId: string;
+  readonly customerName: string;
+  readonly phone: string | null;
+  readonly balanceMinor: number;
+  readonly creditLimitMinor: number | null;
+  readonly lastActivityAt: string | null;
+};
+
+type PayableReportRow = {
+  readonly supplierId: string;
+  readonly supplierName: string;
+  readonly phone: string | null;
+  readonly balanceMinor: number;
+  readonly lastActivityAt: string | null;
+};
+
+type CashSessionReportRow = {
+  readonly openingCashMinor: number | null;
+  readonly status: "open" | "closed" | null;
 };
 
 const defaultSettings: AppSettingsDto = {
@@ -1995,6 +2043,250 @@ const registerAppHandlers = (state: AppState): void => {
   );
 };
 
+const reportDateRange = (
+  payload: ReportsSummaryContract["request"]["payload"]
+): { readonly from: string; readonly to: string } => ({
+  from: `${payload.dateFrom}T00:00:00.000Z`,
+  to: `${payload.dateTo}T23:59:59.999Z`
+});
+
+const registerReportHandlers = (state: AppState): void => {
+  ipcMain.handle(
+    "orix:reports.summary",
+    (_event, request: ReportsSummaryContract["request"]): ReportsSummaryContract["response"] => {
+      if (!can(state, "reports.view")) {
+        return appFail("You do not have permission to view reports.");
+      }
+      try {
+        const { from, to } = reportDateRange(request.payload);
+        const dailySales = state.connection.sqlite
+          .prepare(
+            `SELECT s.id AS saleId,
+                    s.sale_number AS saleNumber,
+                    s.sale_date AS saleDate,
+                    c.name AS customerName,
+                    COUNT(si.id) AS itemCount,
+                    s.subtotal_minor AS subtotalMinor,
+                    s.discount_minor AS discountMinor,
+                    s.tax_minor AS taxMinor,
+                    s.total_minor AS totalMinor,
+                    s.paid_minor AS paidMinor,
+                    u.display_name AS cashierName
+               FROM sales s
+               LEFT JOIN sale_items si ON si.sale_id = s.id
+               LEFT JOIN customers c ON c.id = s.customer_id
+               LEFT JOIN users u ON u.id = s.completed_by_user_id
+              WHERE s.store_id = ?
+                AND s.status = 'completed'
+                AND s.sale_date BETWEEN ? AND ?
+              GROUP BY s.id
+              ORDER BY s.sale_date DESC
+              LIMIT 500`
+          )
+          .all(state.storeId, from, to) as DailySalesReportRow[];
+
+        const inventoryRows = state.connection.sqlite
+          .prepare(
+            `SELECT p.id AS productId,
+                    p.barcode,
+                    p.name AS productName,
+                    c.name AS categoryName,
+                    COALESCE(stock.currentStock, 0) AS currentStock,
+                    COALESCE(p.reorder_level_quantity, 0) AS minimumStock,
+                    COALESCE(p.purchase_cost_minor, 0) AS purchasePriceMinor,
+                    COALESCE(p.sale_price_minor, 0) AS salePriceMinor
+               FROM products p
+               LEFT JOIN categories c ON c.id = p.category_id
+               LEFT JOIN (
+                 SELECT product_id,
+                        SUM(CASE WHEN direction = 'in' THEN quantity ELSE -quantity END) AS currentStock
+                   FROM inventory_transactions
+                  WHERE status = 'posted'
+                  GROUP BY product_id
+               ) stock ON stock.product_id = p.id
+              WHERE p.store_id = ?
+                AND p.archived_at IS NULL
+                AND p.is_stock_tracked = 1
+              ORDER BY p.name ASC
+              LIMIT 1000`
+          )
+          .all(state.storeId) as InventoryReportRow[];
+
+        const inventoryValue = inventoryRows.map((row) => {
+          const currentStock = row.currentStock ?? 0;
+          const purchasePriceMinor = row.purchasePriceMinor ?? 0;
+          const salePriceMinor = row.salePriceMinor ?? 0;
+          return {
+            productId: row.productId,
+            barcode: row.barcode,
+            productName: row.productName,
+            categoryName: row.categoryName,
+            currentStock,
+            purchasePriceMinor,
+            salePriceMinor,
+            purchaseValueMinor: currentStock * purchasePriceMinor,
+            retailValueMinor: currentStock * salePriceMinor
+          };
+        });
+
+        const lowStock = inventoryRows
+          .filter((row) => (row.currentStock ?? 0) <= (row.minimumStock ?? 0))
+          .map((row) => {
+            const currentStock = row.currentStock ?? 0;
+            const minimumStock = row.minimumStock ?? 0;
+            return {
+              productId: row.productId,
+              barcode: row.barcode,
+              productName: row.productName,
+              categoryName: row.categoryName,
+              currentStock,
+              minimumStock,
+              needToOrder: Math.max(minimumStock - currentStock, 0)
+            };
+          });
+
+        const receivables = state.connection.sqlite
+          .prepare(
+            `SELECT c.id AS customerId,
+                    c.name AS customerName,
+                    c.phone,
+                    COALESCE(SUM(le.debit_minor - le.credit_minor), 0) AS balanceMinor,
+                    COALESCE(c.credit_limit_minor, 0) AS creditLimitMinor,
+                    MAX(COALESCE(lt.posted_at, le.created_at)) AS lastActivityAt
+               FROM customers c
+               LEFT JOIN ledger_entries le
+                 ON le.account_ref_type = 'customer'
+                AND le.account_ref_id = c.id
+               LEFT JOIN ledger_transactions lt ON lt.id = le.ledger_transaction_id
+              WHERE c.store_id = ?
+                AND c.archived_at IS NULL
+              GROUP BY c.id
+             HAVING balanceMinor > 0
+              ORDER BY balanceMinor DESC
+              LIMIT 500`
+          )
+          .all(state.storeId) as ReceivableReportRow[];
+
+        const payables = state.connection.sqlite
+          .prepare(
+            `SELECT s.id AS supplierId,
+                    s.name AS supplierName,
+                    s.phone,
+                    COALESCE(SUM(le.credit_minor - le.debit_minor), 0) AS balanceMinor,
+                    MAX(COALESCE(lt.posted_at, le.created_at)) AS lastActivityAt
+               FROM suppliers s
+               LEFT JOIN ledger_entries le
+                 ON le.account_ref_type = 'supplier'
+                AND le.account_ref_id = s.id
+               LEFT JOIN ledger_transactions lt ON lt.id = le.ledger_transaction_id
+              WHERE s.store_id = ?
+                AND s.archived_at IS NULL
+              GROUP BY s.id
+             HAVING balanceMinor > 0
+              ORDER BY balanceMinor DESC
+              LIMIT 500`
+          )
+          .all(state.storeId) as PayableReportRow[];
+
+        const cashSession = state.connection.sqlite
+          .prepare(
+            `SELECT cs.opening_cash_minor AS openingCashMinor,
+                    cs.status
+               FROM cash_sessions cs
+               JOIN cash_accounts ca ON ca.id = cs.cash_account_id
+              WHERE ca.branch_id = ?
+                AND cs.business_day_id = ?
+              ORDER BY cs.opened_at DESC
+              LIMIT 1`
+          )
+          .get(state.branchId, state.businessDayId) as CashSessionReportRow | undefined;
+        const cashSalesMinor = moneyAmount(
+          state.connection,
+          "SELECT COALESCE(SUM(total_minor), 0) AS amount FROM sales WHERE store_id = ? AND status = 'completed' AND sale_type = 'cash' AND sale_date BETWEEN ? AND ?",
+          state.storeId,
+          from,
+          to
+        );
+        const customerCollectionsMinor = moneyAmount(
+          state.connection,
+          `SELECT COALESCE(SUM(cp.amount_minor), 0) AS amount
+             FROM customer_payments cp
+             JOIN payment_methods pm ON pm.id = cp.payment_method_id
+            WHERE cp.store_id = ?
+              AND cp.status = 'recorded'
+              AND cp.paid_at BETWEEN ? AND ?
+              AND pm.method_type = 'cash'`,
+          state.storeId,
+          from,
+          to
+        );
+        const supplierPaymentsMinor = moneyAmount(
+          state.connection,
+          `SELECT COALESCE(SUM(sp.amount_minor), 0) AS amount
+             FROM supplier_payments sp
+             JOIN payment_methods pm ON pm.id = sp.payment_method_id
+            WHERE sp.store_id = ?
+              AND sp.status = 'recorded'
+              AND sp.paid_at BETWEEN ? AND ?
+              AND pm.method_type = 'cash'`,
+          state.storeId,
+          from,
+          to
+        );
+        const openingCashMinor = cashSession?.openingCashMinor ?? 0;
+        const expectedCashMinor =
+          openingCashMinor + cashSalesMinor + customerCollectionsMinor - supplierPaymentsMinor;
+
+        return appOk({
+          generatedAt: new Date().toISOString(),
+          dateFrom: request.payload.dateFrom,
+          dateTo: request.payload.dateTo,
+          totals: {
+            salesMinor: dailySales.reduce((total, sale) => total + sale.totalMinor, 0),
+            cashExpectedMinor: expectedCashMinor,
+            inventoryPurchaseValueMinor: inventoryValue.reduce(
+              (total, item) => total + item.purchaseValueMinor,
+              0
+            ),
+            inventoryRetailValueMinor: inventoryValue.reduce(
+              (total, item) => total + item.retailValueMinor,
+              0
+            ),
+            receivablesMinor: receivables.reduce(
+              (total, customer) => total + customer.balanceMinor,
+              0
+            ),
+            payablesMinor: payables.reduce((total, supplier) => total + supplier.balanceMinor, 0),
+            lowStockCount: lowStock.length
+          },
+          dailySales: dailySales.map((sale) => ({
+            ...sale,
+            customerName: sale.customerName ?? "Walk-in Customer",
+            cashierName: sale.cashierName ?? "Unknown"
+          })),
+          cashDrawer: {
+            openingCashMinor,
+            cashSalesMinor,
+            customerCollectionsMinor,
+            supplierPaymentsMinor,
+            expectedCashMinor,
+            sessionStatus: cashSession?.status ?? "not-opened"
+          },
+          inventoryValue,
+          lowStock,
+          receivables: receivables.map((customer) => ({
+            ...customer,
+            creditLimitMinor: customer.creditLimitMinor ?? 0
+          })),
+          payables
+        });
+      } catch {
+        return appFail("Unable to load reports.");
+      }
+    }
+  );
+};
+
 const registerProductHandlers = (state: AppState): void => {
   ipcMain.handle("orix:products.list", (_event, request: ProductListContract["request"]) =>
     toIpc(
@@ -2884,6 +3176,7 @@ void app.whenReady().then(() => {
   registerSupplierHandlers(appState);
   registerPurchaseHandlers(appState);
   registerSaleHandlers(appState);
+  registerReportHandlers(appState);
   registerInventoryHandlers(appState);
   registerMigrationHandlers(appState);
   registerProductHandlers(appState);

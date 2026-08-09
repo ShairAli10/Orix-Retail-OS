@@ -39,6 +39,7 @@ import type {
   PurchaseListItemDto,
   PurchaseListRequest,
   PurchaseWritePayload,
+  ReportsSummaryDto,
   RoleName,
   CashRegisterDto,
   ReceiptDto,
@@ -738,6 +739,9 @@ const App = () => {
           showToast={showToast}
         />
       );
+    }
+    if (route === "reports") {
+      return <ReportsModule showToast={showToast} />;
     }
     if (route === "settings") {
       return (
@@ -5008,6 +5012,414 @@ const downloadCsv = (filename: string, rows: readonly (readonly string[])[]): vo
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+};
+
+type ReportTab = "sales" | "cash" | "inventory" | "low-stock" | "receivables" | "payables";
+
+const ReportsModule = ({
+  showToast
+}: {
+  readonly showToast: (message: string, tone?: ToastState["tone"]) => void;
+}) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const [dateFrom, setDateFrom] = useState(today);
+  const [dateTo, setDateTo] = useState(today);
+  const [activeTab, setActiveTab] = useState<ReportTab>("sales");
+  const [report, setReport] = useState<ReportsSummaryDto | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const loadReport = useCallback(async () => {
+    setLoading(true);
+    const response = await window.orix.reports.summary({ dateFrom, dateTo });
+    if (response.ok) {
+      setReport(response.value);
+    } else {
+      showToast(response.error.message, "error");
+    }
+    setLoading(false);
+  }, [dateFrom, dateTo, showToast]);
+
+  useEffect(() => {
+    void loadReport();
+  }, [loadReport]);
+
+  const exportActiveReport = () => {
+    if (report === null) {
+      showToast("Load a report before exporting.", "error");
+      return;
+    }
+    downloadCsv(`orix-${activeTab}-${dateFrom}-to-${dateTo}.csv`, reportCsvRows(report, activeTab));
+    showToast("Report exported.");
+  };
+
+  const tabs: readonly { readonly id: ReportTab; readonly label: string }[] = [
+    { id: "sales", label: "Daily Sales" },
+    { id: "cash", label: "Cash Drawer" },
+    { id: "inventory", label: "Inventory Value" },
+    { id: "low-stock", label: "Low Stock" },
+    { id: "receivables", label: "Receivables" },
+    { id: "payables", label: "Payables" }
+  ];
+
+  return (
+    <section className="page-stack reports-module">
+      <div className="page-heading">
+        <div>
+          <p className="eyebrow">Operations</p>
+          <h1>Reports</h1>
+        </div>
+        <div className="toolbar-actions">
+          <button onClick={() => void loadReport()}>
+            <Icon name="refresh" />
+            Refresh
+          </button>
+          <button onClick={exportActiveReport}>
+            <Icon name="upload" />
+            CSV
+          </button>
+          <button
+            onClick={() => {
+              window.print();
+            }}
+          >
+            <Icon name="receipt" />
+            Print
+          </button>
+        </div>
+      </div>
+      <div className="report-filters card">
+        <label>
+          From
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(event) => {
+              setDateFrom(event.target.value);
+            }}
+          />
+        </label>
+        <label>
+          To
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(event) => {
+              setDateTo(event.target.value);
+            }}
+          />
+        </label>
+        <button className="primary" onClick={() => void loadReport()}>
+          Run Reports
+        </button>
+      </div>
+      {loading ? (
+        <LoadingState label="Loading reports" />
+      ) : report === null ? (
+        <EmptyState title="Reports unavailable" description="Refresh to load report data." />
+      ) : (
+        <>
+          <div className="report-summary-grid">
+            <Metric label="Sales" value={money(report.totals.salesMinor)} />
+            <Metric label="Cash Expected" value={money(report.totals.cashExpectedMinor)} />
+            <Metric
+              label="Inventory Cost"
+              value={money(report.totals.inventoryPurchaseValueMinor)}
+            />
+            <Metric
+              label="Inventory Retail"
+              value={money(report.totals.inventoryRetailValueMinor)}
+            />
+            <Metric label="Receivables" value={money(report.totals.receivablesMinor)} />
+            <Metric label="Payables" value={money(report.totals.payablesMinor)} />
+          </div>
+          <div className="report-tabs" role="tablist" aria-label="Reports">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                className={activeTab === tab.id ? "active" : ""}
+                onClick={() => {
+                  setActiveTab(tab.id);
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <ReportPanel report={report} activeTab={activeTab} />
+        </>
+      )}
+    </section>
+  );
+};
+
+const ReportPanel = ({
+  report,
+  activeTab
+}: {
+  readonly report: ReportsSummaryDto;
+  readonly activeTab: ReportTab;
+}) => {
+  if (activeTab === "cash") {
+    return (
+      <section className="card report-panel">
+        <div className="report-title">
+          <div>
+            <p className="eyebrow">Cash Drawer</p>
+            <h2>Cash movement</h2>
+          </div>
+          <span className="pill">{report.cashDrawer.sessionStatus}</span>
+        </div>
+        <div className="cash-report-grid">
+          <Metric label="Opening Cash" value={money(report.cashDrawer.openingCashMinor)} />
+          <Metric label="Cash Sales" value={money(report.cashDrawer.cashSalesMinor)} />
+          <Metric
+            label="Customer Collections"
+            value={money(report.cashDrawer.customerCollectionsMinor)}
+          />
+          <Metric
+            label="Supplier Payments"
+            value={money(report.cashDrawer.supplierPaymentsMinor)}
+          />
+          <Metric label="Expected Cash" value={money(report.cashDrawer.expectedCashMinor)} />
+        </div>
+      </section>
+    );
+  }
+
+  if (activeTab === "inventory") {
+    return (
+      <ReportTable
+        title="Inventory value"
+        empty="No stock-tracked items found."
+        headers={["Item", "Barcode", "Category", "Stock", "Cost Value", "Retail Value"]}
+        rows={report.inventoryValue.map((item) => [
+          item.productName,
+          item.barcode ?? "",
+          item.categoryName ?? "",
+          String(item.currentStock),
+          money(item.purchaseValueMinor),
+          money(item.retailValueMinor)
+        ])}
+      />
+    );
+  }
+
+  if (activeTab === "low-stock") {
+    return (
+      <ReportTable
+        title="Low stock"
+        empty="No low stock items right now."
+        headers={["Item", "Barcode", "Category", "Current", "Minimum", "Need"]}
+        rows={report.lowStock.map((item) => [
+          item.productName,
+          item.barcode ?? "",
+          item.categoryName ?? "",
+          String(item.currentStock),
+          String(item.minimumStock),
+          String(item.needToOrder)
+        ])}
+      />
+    );
+  }
+
+  if (activeTab === "receivables") {
+    return (
+      <ReportTable
+        title="Customer receivables"
+        empty="No customer balances due."
+        headers={["Customer", "Phone", "Balance", "Credit Limit", "Last Activity"]}
+        rows={report.receivables.map((customer) => [
+          customer.customerName,
+          customer.phone ?? "",
+          money(customer.balanceMinor),
+          money(customer.creditLimitMinor),
+          customer.lastActivityAt === null ? "" : new Date(customer.lastActivityAt).toLocaleString()
+        ])}
+      />
+    );
+  }
+
+  if (activeTab === "payables") {
+    return (
+      <ReportTable
+        title="Supplier payables"
+        empty="No supplier balances due."
+        headers={["Supplier", "Phone", "Balance", "Last Activity"]}
+        rows={report.payables.map((supplier) => [
+          supplier.supplierName,
+          supplier.phone ?? "",
+          money(supplier.balanceMinor),
+          supplier.lastActivityAt === null ? "" : new Date(supplier.lastActivityAt).toLocaleString()
+        ])}
+      />
+    );
+  }
+
+  return (
+    <ReportTable
+      title="Daily sales"
+      empty="No completed sales in this date range."
+      headers={[
+        "Invoice",
+        "Date",
+        "Customer",
+        "Items",
+        "Subtotal",
+        "Discount",
+        "Total",
+        "Paid",
+        "Cashier"
+      ]}
+      rows={report.dailySales.map((sale) => [
+        sale.saleNumber,
+        new Date(sale.saleDate).toLocaleString(),
+        sale.customerName,
+        String(sale.itemCount),
+        money(sale.subtotalMinor),
+        money(sale.discountMinor),
+        money(sale.totalMinor),
+        money(sale.paidMinor),
+        sale.cashierName
+      ])}
+    />
+  );
+};
+
+const ReportTable = ({
+  title,
+  empty,
+  headers,
+  rows
+}: {
+  readonly title: string;
+  readonly empty: string;
+  readonly headers: readonly string[];
+  readonly rows: readonly (readonly string[])[];
+}) => (
+  <section className="card report-panel">
+    <div className="report-title">
+      <div>
+        <p className="eyebrow">Report</p>
+        <h2>{title}</h2>
+      </div>
+      <span className="pill">{rows.length} rows</span>
+    </div>
+    {rows.length === 0 ? (
+      <EmptyState title={title} description={empty} />
+    ) : (
+      <div className="table-wrap report-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              {headers.map((header) => (
+                <th key={header}>{header}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={`${title}-${String(rowIndex)}`}>
+                {row.map((cell, cellIndex) => (
+                  <td key={`${title}-${String(rowIndex)}-${String(cellIndex)}`}>{cell}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </section>
+);
+
+const reportCsvRows = (
+  report: ReportsSummaryDto,
+  activeTab: ReportTab
+): readonly (readonly string[])[] => {
+  if (activeTab === "cash") {
+    return [
+      ["Metric", "Amount"],
+      ["Opening Cash", fromMinor(report.cashDrawer.openingCashMinor)],
+      ["Cash Sales", fromMinor(report.cashDrawer.cashSalesMinor)],
+      ["Customer Collections", fromMinor(report.cashDrawer.customerCollectionsMinor)],
+      ["Supplier Payments", fromMinor(report.cashDrawer.supplierPaymentsMinor)],
+      ["Expected Cash", fromMinor(report.cashDrawer.expectedCashMinor)]
+    ];
+  }
+  if (activeTab === "inventory") {
+    return [
+      ["Item", "Barcode", "Category", "Stock", "Purchase Value", "Retail Value"],
+      ...report.inventoryValue.map((item) => [
+        item.productName,
+        item.barcode ?? "",
+        item.categoryName ?? "",
+        String(item.currentStock),
+        fromMinor(item.purchaseValueMinor),
+        fromMinor(item.retailValueMinor)
+      ])
+    ];
+  }
+  if (activeTab === "low-stock") {
+    return [
+      ["Item", "Barcode", "Category", "Current", "Minimum", "Need"],
+      ...report.lowStock.map((item) => [
+        item.productName,
+        item.barcode ?? "",
+        item.categoryName ?? "",
+        String(item.currentStock),
+        String(item.minimumStock),
+        String(item.needToOrder)
+      ])
+    ];
+  }
+  if (activeTab === "receivables") {
+    return [
+      ["Customer", "Phone", "Balance", "Credit Limit", "Last Activity"],
+      ...report.receivables.map((customer) => [
+        customer.customerName,
+        customer.phone ?? "",
+        fromMinor(customer.balanceMinor),
+        fromMinor(customer.creditLimitMinor),
+        customer.lastActivityAt ?? ""
+      ])
+    ];
+  }
+  if (activeTab === "payables") {
+    return [
+      ["Supplier", "Phone", "Balance", "Last Activity"],
+      ...report.payables.map((supplier) => [
+        supplier.supplierName,
+        supplier.phone ?? "",
+        fromMinor(supplier.balanceMinor),
+        supplier.lastActivityAt ?? ""
+      ])
+    ];
+  }
+  return [
+    [
+      "Invoice",
+      "Date",
+      "Customer",
+      "Items",
+      "Subtotal",
+      "Discount",
+      "Tax",
+      "Total",
+      "Paid",
+      "Cashier"
+    ],
+    ...report.dailySales.map((sale) => [
+      sale.saleNumber,
+      sale.saleDate,
+      sale.customerName,
+      String(sale.itemCount),
+      fromMinor(sale.subtotalMinor),
+      fromMinor(sale.discountMinor),
+      fromMinor(sale.taxMinor),
+      fromMinor(sale.totalMinor),
+      fromMinor(sale.paidMinor),
+      sale.cashierName
+    ])
+  ];
 };
 
 const ProductModule = ({
