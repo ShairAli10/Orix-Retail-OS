@@ -64,6 +64,7 @@ import type {
   PurchaseGetContract,
   PurchaseListContract,
   PurchaseReceiveContract,
+  PurchaseReturnContract,
   PurchaseSaveDraftContract,
   ReportsSummaryContract,
   SettingsGetContract,
@@ -93,6 +94,7 @@ import type {
   SaleIpcError,
   SaleListContract,
   SaleReceiptContract,
+  SaleReturnContract,
   SaleSaveDraftContract,
   SalesDashboardContract,
   SetupStorePayload,
@@ -287,10 +289,12 @@ const allPermissions = [
   "purchases.edit",
   "purchases.receive",
   "purchases.cancel",
+  "purchases.return",
   "sales.view",
   "sales.create",
   "sales.complete",
   "sales.cancel",
+  "sales.return",
   "sales.print",
   "expenses.view",
   "reports.view",
@@ -315,6 +319,7 @@ const rolePermissionMap = {
     "sales.create",
     "sales.complete",
     "sales.cancel",
+    "sales.return",
     "sales.print",
     "about.view"
   ],
@@ -334,6 +339,7 @@ const rolePermissionMap = {
     "purchases.edit",
     "purchases.receive",
     "purchases.cancel",
+    "purchases.return",
     "sales.view",
     "about.view"
   ],
@@ -3062,6 +3068,22 @@ const registerPurchaseHandlers = (state: AppState): void => {
       );
     }
   );
+
+  ipcMain.handle(
+    "orix:purchases.return",
+    async (_event, request: PurchaseReturnContract["request"]) => {
+      if (!can(state, "purchases.return")) return supplierPermissionDenied();
+      return toSupplierIpc(
+        await state.purchaseService.returnPurchase({
+          ...request.payload,
+          storeId: state.storeId,
+          branchId: state.branchId,
+          businessDayId: state.businessDayId,
+          userId: state.userId
+        })
+      );
+    }
+  );
 };
 
 const salePermissionDenied = <T>(
@@ -3128,6 +3150,19 @@ const registerSaleHandlers = (state: AppState): void => {
           userId: state.userId
         })
         .then((result) => (result.ok ? ok({ cancelled: true as const }) : result))
+    );
+  });
+
+  ipcMain.handle("orix:sales.return", async (_event, request: SaleReturnContract["request"]) => {
+    if (!can(state, "sales.return")) return salePermissionDenied();
+    return toSaleIpc(
+      await state.saleService.returnSale({
+        ...request.payload,
+        storeId: state.storeId,
+        branchId: state.branchId,
+        businessDayId: state.businessDayId,
+        userId: state.userId
+      })
     );
   });
 

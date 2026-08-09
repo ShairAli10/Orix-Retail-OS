@@ -9,6 +9,8 @@ import { repositoryError } from "../shared/repository-error.js";
 export type SaleStatusFilter = "draft" | "held" | "completed" | "cancelled" | "all";
 export type SaleSortBy = "saleNumber" | "saleDate" | "customer" | "total" | "status" | "createdAt";
 export type SalePaymentType = "cash" | "credit" | "mixed";
+export type SaleReturnRefundMethod = "cash" | "customer-credit";
+export type SaleReturnCondition = "sellable" | "damaged";
 
 export type SaleItemWrite = {
   readonly productId: string;
@@ -92,6 +94,7 @@ export type SaleItem = {
   readonly discountMinor: number;
   readonly taxMinor: number;
   readonly lineTotalMinor: number;
+  readonly returnedQuantity: number;
 };
 
 export type SaleDetail = SaleListItem & {
@@ -102,6 +105,51 @@ export type SaleDetail = SaleListItem & {
   readonly createdAt: string;
   readonly createdByUserId: string;
   readonly cashierName: string;
+};
+
+export type SaleReturnItemWrite = {
+  readonly saleItemId: string;
+  readonly quantity: number;
+  readonly condition: SaleReturnCondition;
+};
+
+export type SaleReturnWrite = {
+  readonly saleId: string;
+  readonly storeId: string;
+  readonly branchId: string;
+  readonly businessDayId: string;
+  readonly userId: string;
+  readonly reason: string;
+  readonly refundMethod: SaleReturnRefundMethod;
+  readonly items: readonly SaleReturnItemWrite[];
+};
+
+export type SaleReturnItem = {
+  readonly id: string;
+  readonly saleItemId: string;
+  readonly productId: string;
+  readonly productName: string;
+  readonly quantity: number;
+  readonly condition: SaleReturnCondition;
+  readonly restockAction: "return-to-stock" | "do-not-restock";
+  readonly unitPriceMinor: number;
+  readonly lineTotalMinor: number;
+};
+
+export type SaleReturnDetail = {
+  readonly id: string;
+  readonly returnNumber: string;
+  readonly saleId: string;
+  readonly saleNumber: string;
+  readonly customerId: string | null;
+  readonly customerName: string | null;
+  readonly reason: string;
+  readonly refundMethod: SaleReturnRefundMethod;
+  readonly totalRefundMinor: number;
+  readonly cashRefundMinor: number;
+  readonly receivableReductionMinor: number;
+  readonly returnedAt: string;
+  readonly items: readonly SaleReturnItem[];
 };
 
 export type SalePage = {
@@ -199,6 +247,7 @@ type SaleItemRow = {
   readonly discountMinor: number | null;
   readonly taxMinor: number | null;
   readonly lineTotalMinor: number;
+  readonly returnedQuantity: number | null;
 };
 
 type ProductValidationRow = {
@@ -213,6 +262,8 @@ type ProductValidationRow = {
 type CountRow = { readonly count: number };
 type MoneyRow = { readonly amount: number | null };
 type IdRow = { readonly id: string };
+type SaleReturnRow = Omit<SaleReturnDetail, "items">;
+type SaleReturnItemRow = SaleReturnItem;
 
 const defaultMetadata: SaleMetadata = {
   notes: null,
@@ -388,6 +439,201 @@ export class SaleRepository extends BaseRepository<typeof sales> {
       return ok(undefined);
     } catch (cause) {
       return err(repositoryError("REPOSITORY_WRITE_FAILED", "Failed to cancel sale", cause));
+    }
+  }
+
+  public returnSale(input: SaleReturnWrite): CoreResult<SaleReturnDetail> {
+    try {
+      const sale = this.getSale(input.saleId);
+      if (!sale.ok) return sale;
+      if (sale.value === undefined) {
+        return err(repositoryError("REPOSITORY_NOT_FOUND", "Sale was not found"));
+      }
+      if (sale.value.status !== "completed") {
+        return err(repositoryError("REPOSITORY_CONFLICT", "Only completed sales can be returned"));
+      }
+      if (input.refundMethod === "customer-credit" && sale.value.customerId === null) {
+        return err(
+          repositoryError("REPOSITORY_CONFLICT", "Customer credit return requires a customer sale")
+        );
+      }
+      const byItem = new Map(sale.value.items.map((item) => [item.id, item]));
+      const lines = input.items
+        .map((item) => {
+          const original = byItem.get(item.saleItemId);
+          if (original === undefined) return undefined;
+          const available = original.quantity - original.returnedQuantity;
+          return { requested: item, original, available };
+        })
+        .filter((line): line is NonNullable<typeof line> => line !== undefined);
+      if (lines.length !== input.items.length || lines.length === 0) {
+        return err(repositoryError("REPOSITORY_CONFLICT", "Return contains invalid sale items"));
+      }
+      for (const line of lines) {
+        if (line.requested.quantity <= 0 || line.requested.quantity > line.available) {
+          return err(
+            repositoryError(
+              "REPOSITORY_CONFLICT",
+              `${line.original.productName} cannot be returned for the requested quantity`
+            )
+          );
+        }
+      }
+      const timestamp = new Date().toISOString();
+      const returnId = randomUUID();
+      const returnNumber = this.nextSaleReturnNumber(input.branchId);
+      const totalRefundMinor = lines.reduce(
+        (total, line) => total + line.requested.quantity * line.original.unitPriceMinor,
+        0
+      );
+      const cashRefundMinor = input.refundMethod === "cash" ? totalRefundMinor : 0;
+      const receivableReductionMinor =
+        input.refundMethod === "customer-credit" ? totalRefundMinor : 0;
+      this.connection.sqlite
+        .prepare(
+          `INSERT INTO sales_returns (
+            id, store_id, branch_id, business_day_id, original_sale_id, customer_id,
+            return_number, status, reason, refund_method, total_refund_minor, cash_refund_minor,
+            receivable_reduction_minor, returned_at, created_at, updated_at, created_by_user_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          returnId,
+          input.storeId,
+          input.branchId,
+          input.businessDayId,
+          sale.value.id,
+          sale.value.customerId,
+          returnNumber,
+          input.reason.trim(),
+          input.refundMethod,
+          totalRefundMinor,
+          cashRefundMinor,
+          receivableReductionMinor,
+          timestamp,
+          timestamp,
+          timestamp,
+          input.userId
+        );
+      for (const line of lines) {
+        const restockAction =
+          line.requested.condition === "sellable" ? "return-to-stock" : "do-not-restock";
+        const lineTotalMinor = line.requested.quantity * line.original.unitPriceMinor;
+        this.connection.sqlite
+          .prepare(
+            `INSERT INTO sales_return_items (
+              id, sales_return_id, sale_item_id, product_id, quantity, condition, restock_action,
+              unit_price_minor, line_total_minor, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .run(
+            randomUUID(),
+            returnId,
+            line.original.id,
+            line.original.productId,
+            line.requested.quantity,
+            line.requested.condition,
+            restockAction,
+            line.original.unitPriceMinor,
+            lineTotalMinor,
+            timestamp
+          );
+        this.connection.sqlite
+          .prepare(
+            `UPDATE sale_items
+                SET returned_quantity = COALESCE(returned_quantity, 0) + ?, updated_at = ?
+              WHERE id = ?`
+          )
+          .run(line.requested.quantity, timestamp, line.original.id);
+        if (restockAction === "return-to-stock") {
+          this.connection.sqlite
+            .prepare(
+              `INSERT INTO inventory_transactions (
+                id, store_id, branch_id, business_day_id, product_id, source_type, source_id,
+                movement_type, direction, quantity, unit_cost_minor, reason, status,
+                posted_at, posted_by_user_id, created_at
+              ) VALUES (?, ?, ?, ?, ?, 'sales_return', ?, 'sale-return', 'in', ?, NULL, ?, 'posted', ?, ?, ?)`
+            )
+            .run(
+              randomUUID(),
+              input.storeId,
+              input.branchId,
+              input.businessDayId,
+              line.original.productId,
+              returnId,
+              line.requested.quantity,
+              input.reason.trim(),
+              timestamp,
+              input.userId,
+              timestamp
+            );
+        }
+      }
+      const remaining = (
+        this.connection.sqlite
+          .prepare(
+            `SELECT COUNT(*) AS count
+               FROM sale_items
+              WHERE sale_id = ? AND COALESCE(returned_quantity, 0) < quantity`
+          )
+          .get(sale.value.id) as CountRow
+      ).count;
+      if (remaining === 0) {
+        this.connection.sqlite
+          .prepare("UPDATE sales SET returned_at = ?, updated_at = ? WHERE id = ?")
+          .run(timestamp, timestamp, sale.value.id);
+      }
+      this.postReturnLedger(sale.value, input, returnId, totalRefundMinor, timestamp);
+      this.writeAudit(input, "SaleReturned", returnId, {
+        saleId: sale.value.id,
+        saleNumber: sale.value.saleNumber,
+        returnNumber,
+        totalRefundMinor,
+        reason: input.reason.trim()
+      });
+      const created = this.getSaleReturn(returnId);
+      return created.ok && created.value !== undefined
+        ? ok(created.value)
+        : err(repositoryError("REPOSITORY_READ_FAILED", "Failed to load sale return"));
+    } catch (cause) {
+      return err(repositoryError("REPOSITORY_WRITE_FAILED", "Failed to return sale", cause));
+    }
+  }
+
+  public getSaleReturn(id: string): CoreResult<SaleReturnDetail | undefined> {
+    try {
+      const row = this.connection.sqlite
+        .prepare(
+          `SELECT sr.id, sr.return_number AS returnNumber, sr.original_sale_id AS saleId,
+                  s.sale_number AS saleNumber, sr.customer_id AS customerId, c.name AS customerName,
+                  sr.reason, sr.refund_method AS refundMethod,
+                  sr.total_refund_minor AS totalRefundMinor,
+                  sr.cash_refund_minor AS cashRefundMinor,
+                  sr.receivable_reduction_minor AS receivableReductionMinor,
+                  sr.returned_at AS returnedAt
+             FROM sales_returns sr
+             JOIN sales s ON s.id = sr.original_sale_id
+             LEFT JOIN customers c ON c.id = sr.customer_id
+            WHERE sr.id = ?
+            LIMIT 1`
+        )
+        .get(id) as SaleReturnRow | undefined;
+      if (row === undefined) return ok(undefined);
+      const items = this.connection.sqlite
+        .prepare(
+          `SELECT sri.id, sri.sale_item_id AS saleItemId, sri.product_id AS productId,
+                  p.name AS productName, sri.quantity, sri.condition,
+                  sri.restock_action AS restockAction, sri.unit_price_minor AS unitPriceMinor,
+                  sri.line_total_minor AS lineTotalMinor
+             FROM sales_return_items sri
+             JOIN products p ON p.id = sri.product_id
+            WHERE sri.sales_return_id = ?
+            ORDER BY sri.created_at ASC`
+        )
+        .all(id) as SaleReturnItemRow[];
+      return ok({ ...row, items });
+    } catch (cause) {
+      return err(repositoryError("REPOSITORY_READ_FAILED", "Failed to load sale return", cause));
     }
   }
 
@@ -731,6 +977,57 @@ export class SaleRepository extends BaseRepository<typeof sales> {
     );
   }
 
+  private postReturnLedger(
+    sale: SaleDetail,
+    input: SaleReturnWrite,
+    returnId: string,
+    totalRefundMinor: number,
+    timestamp: string
+  ): void {
+    const accounts = this.ensureLedgerAccounts(input.storeId, input.userId);
+    const transactionId = randomUUID();
+    this.connection.sqlite
+      .prepare(
+        `INSERT INTO ledger_transactions (
+          id, store_id, branch_id, business_day_id, source_type, source_id,
+          transaction_type, status, posted_at, posted_by_user_id, memo, created_at
+        ) VALUES (?, ?, ?, ?, 'sales_return', ?, 'sales-return', 'posted', ?, ?, ?, ?)`
+      )
+      .run(
+        transactionId,
+        input.storeId,
+        input.branchId,
+        input.businessDayId,
+        returnId,
+        timestamp,
+        input.userId,
+        `Sales return ${sale.saleNumber}`,
+        timestamp
+      );
+    this.insertLedgerEntry(
+      transactionId,
+      accounts.revenueAccountId,
+      "income",
+      null,
+      null,
+      totalRefundMinor,
+      0,
+      "Sales return"
+    );
+    const creditAccount =
+      input.refundMethod === "cash" ? accounts.cashAccountId : accounts.receivableAccountId;
+    this.insertLedgerEntry(
+      transactionId,
+      creditAccount,
+      input.refundMethod === "cash" ? "cash" : "receivable",
+      input.refundMethod === "cash" ? null : "customer",
+      input.refundMethod === "cash" ? null : sale.customerId,
+      0,
+      totalRefundMinor,
+      input.refundMethod === "cash" ? "Cash refund" : "Customer receivable reduced"
+    );
+  }
+
   private saleBaseSql(): string {
     return `
       SELECT s.id, s.sale_number AS saleNumber, s.customer_id AS customerId,
@@ -805,7 +1102,8 @@ export class SaleRepository extends BaseRepository<typeof sales> {
           `SELECT si.id, si.product_id AS productId, p.name AS productName, p.barcode,
                   si.unit_id AS unitId, u.name AS unitName, si.quantity,
                   si.unit_price_minor AS unitPriceMinor, si.discount_minor AS discountMinor,
-                  si.tax_minor AS taxMinor, si.line_total_minor AS lineTotalMinor
+                  si.tax_minor AS taxMinor, si.line_total_minor AS lineTotalMinor,
+                  si.returned_quantity AS returnedQuantity
              FROM sale_items si
              JOIN products p ON p.id = si.product_id
              JOIN units u ON u.id = si.unit_id
@@ -825,7 +1123,8 @@ export class SaleRepository extends BaseRepository<typeof sales> {
           unitPriceMinor: row.unitPriceMinor,
           discountMinor: row.discountMinor ?? 0,
           taxMinor: row.taxMinor ?? 0,
-          lineTotalMinor: row.lineTotalMinor
+          lineTotalMinor: row.lineTotalMinor,
+          returnedQuantity: row.returnedQuantity ?? 0
         }))
       );
     } catch (cause) {
@@ -1032,6 +1331,13 @@ export class SaleRepository extends BaseRepository<typeof sales> {
       .prepare("SELECT COUNT(*) AS count FROM sales WHERE branch_id = ?")
       .get(branchId) as CountRow;
     return `SL-${String(row.count + 1).padStart(6, "0")}`;
+  }
+
+  private nextSaleReturnNumber(branchId: string): string {
+    const row = this.connection.sqlite
+      .prepare("SELECT COUNT(*) AS count FROM sales_returns WHERE branch_id = ?")
+      .get(branchId) as CountRow;
+    return `SR-${String(row.count + 1).padStart(6, "0")}`;
   }
 
   private money(sql: string, ...params: readonly string[]): number {

@@ -325,10 +325,12 @@ export type PermissionCode =
   | "purchases.edit"
   | "purchases.receive"
   | "purchases.cancel"
+  | "purchases.return"
   | "sales.view"
   | "sales.create"
   | "sales.complete"
   | "sales.cancel"
+  | "sales.return"
   | "sales.print"
   | "expenses.view"
   | "reports.view"
@@ -895,6 +897,7 @@ export type PurchaseItemDto = {
   readonly discountMinor: number;
   readonly taxMinor: number;
   readonly lineTotalMinor: number;
+  readonly returnedQuantity: number;
 };
 
 export type PurchaseDetailDto = PurchaseListItemDto & {
@@ -907,6 +910,41 @@ export type PurchaseDetailDto = PurchaseListItemDto & {
   readonly items: readonly PurchaseItemDto[];
   readonly createdAt: string;
   readonly createdByUserId: string;
+};
+
+export type PurchaseReturnItemPayload = {
+  readonly purchaseItemId: string;
+  readonly quantity: number;
+};
+
+export type PurchaseReturnPayload = {
+  readonly purchaseId: string;
+  readonly reason: string;
+  readonly items: readonly PurchaseReturnItemPayload[];
+};
+
+export type PurchaseReturnItemDto = {
+  readonly id: string;
+  readonly purchaseItemId: string;
+  readonly productId: string;
+  readonly productName: string;
+  readonly quantity: number;
+  readonly unitCostMinor: number;
+  readonly lineTotalMinor: number;
+};
+
+export type PurchaseReturnDto = {
+  readonly id: string;
+  readonly returnNumber: string;
+  readonly purchaseId: string;
+  readonly purchaseNumber: string;
+  readonly supplierId: string;
+  readonly supplierName: string;
+  readonly reason: string;
+  readonly totalValueMinor: number;
+  readonly payableReductionMinor: number;
+  readonly returnedAt: string;
+  readonly items: readonly PurchaseReturnItemDto[];
 };
 
 export type SupplierIpcError = {
@@ -986,6 +1024,7 @@ export type SaleItemDto = {
   readonly discountMinor: number;
   readonly taxMinor: number;
   readonly lineTotalMinor: number;
+  readonly returnedQuantity: number;
 };
 
 export type SaleDetailDto = SaleListItemDto & {
@@ -1026,6 +1065,50 @@ export type ReceiptDto = {
   readonly changeDueMinor: number;
   readonly paymentType: SalePaymentType;
   readonly items: readonly ReceiptLineItemDto[];
+};
+
+export type SaleReturnRefundMethod = "cash" | "customer-credit";
+export type SaleReturnCondition = "sellable" | "damaged";
+
+export type SaleReturnItemPayload = {
+  readonly saleItemId: string;
+  readonly quantity: number;
+  readonly condition: SaleReturnCondition;
+};
+
+export type SaleReturnPayload = {
+  readonly saleId: string;
+  readonly reason: string;
+  readonly refundMethod: SaleReturnRefundMethod;
+  readonly items: readonly SaleReturnItemPayload[];
+};
+
+export type SaleReturnItemDto = {
+  readonly id: string;
+  readonly saleItemId: string;
+  readonly productId: string;
+  readonly productName: string;
+  readonly quantity: number;
+  readonly condition: SaleReturnCondition;
+  readonly restockAction: "return-to-stock" | "do-not-restock";
+  readonly unitPriceMinor: number;
+  readonly lineTotalMinor: number;
+};
+
+export type SaleReturnDto = {
+  readonly id: string;
+  readonly returnNumber: string;
+  readonly saleId: string;
+  readonly saleNumber: string;
+  readonly customerId: string | null;
+  readonly customerName: string | null;
+  readonly reason: string;
+  readonly refundMethod: SaleReturnRefundMethod;
+  readonly totalRefundMinor: number;
+  readonly cashRefundMinor: number;
+  readonly receivableReductionMinor: number;
+  readonly returnedAt: string;
+  readonly items: readonly SaleReturnItemDto[];
 };
 
 export type CashRegisterDto = {
@@ -1595,6 +1678,13 @@ export type PurchaseCancelContract = IpcContract<
   SupplierIpcError
 >;
 
+export type PurchaseReturnContract = IpcContract<
+  "orix:purchases.return",
+  PurchaseReturnPayload,
+  { readonly return: PurchaseReturnDto },
+  SupplierIpcError
+>;
+
 export type SaleListContract = IpcContract<
   "orix:sales.list",
   SaleListRequest,
@@ -1634,6 +1724,13 @@ export type SaleCancelContract = IpcContract<
   "orix:sales.cancel",
   { readonly id: string; readonly reason: string },
   { readonly cancelled: true },
+  SaleIpcError
+>;
+
+export type SaleReturnContract = IpcContract<
+  "orix:sales.return",
+  SaleReturnPayload,
+  { readonly return: SaleReturnDto },
   SaleIpcError
 >;
 
@@ -1709,12 +1806,14 @@ export type OrixIpcContract =
   | PurchaseSaveDraftContract
   | PurchaseReceiveContract
   | PurchaseCancelContract
+  | PurchaseReturnContract
   | SaleListContract
   | SaleGetContract
   | SaleSaveDraftContract
   | SaleHoldContract
   | SaleCompleteContract
   | SaleCancelContract
+  | SaleReturnContract
   | SaleReceiptContract
   | CashRegisterContract
   | SalesDashboardContract

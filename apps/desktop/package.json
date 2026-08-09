@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -b && vite build",
-    "smoke": "electron . --smoke",
+    "smoke": "env -u ELECTRON_RUN_AS_NODE electron . --smoke",
     "typecheck": "tsc -b"
   },
   "dependencies": {

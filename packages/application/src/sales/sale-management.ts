@@ -7,6 +7,8 @@ import type {
   SaleDetail,
   SaleListQuery,
   SalePage,
+  SaleReturnDetail,
+  SaleReturnWrite,
   SalesDashboardSummary,
   SaleWrite
 } from "@orix/repositories";
@@ -16,6 +18,10 @@ import type { ApplicationServiceContext } from "../shared/service-context.js";
 export type SaleMutationOutput = {
   readonly sale: SaleDetail;
   readonly receipt: ReceiptModel | null;
+};
+
+export type SaleReturnOutput = {
+  readonly return: SaleReturnDetail;
 };
 
 const validationError = (message: string, fields?: readonly string[]): CoreError =>
@@ -139,6 +145,24 @@ export class SaleManagementApplicationService {
     return this.publishAfterCommit(result, events);
   }
 
+  public async returnSale(input: SaleReturnWrite): Promise<CoreResult<SaleReturnOutput>> {
+    const validation = this.validateReturn(input);
+    if (!validation.ok) return validation;
+    const events: ApplicationEvent[] = [];
+    const result = await this.context.transactionRunner.run(
+      { name: "sales.return", metadata: { actorId: input.userId } },
+      () => {
+        const saleReturn = this.context.repositories.sales.returnSale(input);
+        if (!saleReturn.ok) return Promise.resolve(saleReturn);
+        events.push(this.event("SaleReturned", saleReturn.value.id, input));
+        events.push(this.event("InventoryIncreased", saleReturn.value.id, input));
+        events.push(this.event("LedgerEntryPosted", saleReturn.value.id, input));
+        return Promise.resolve(ok({ return: saleReturn.value }));
+      }
+    );
+    return this.publishAfterCommit(result, events);
+  }
+
   private validateSale(
     input: SaleWrite,
     targetStatus: "draft" | "held" | "completed"
@@ -183,6 +207,20 @@ export class SaleManagementApplicationService {
     }
     return fields.length > 0
       ? err(validationError("Sale details are missing or invalid.", [...new Set(fields)]))
+      : ok(undefined);
+  }
+
+  private validateReturn(input: SaleReturnWrite): CoreResult<void> {
+    const fields: string[] = [];
+    if (input.saleId.trim().length === 0) fields.push("saleId");
+    if (input.reason.trim().length < 3) fields.push("reason");
+    if (input.items.length === 0) fields.push("items");
+    for (const item of input.items) {
+      if (item.saleItemId.trim().length === 0) fields.push("saleItemId");
+      if (item.quantity <= 0) fields.push("quantity");
+    }
+    return fields.length > 0
+      ? err(validationError("Sale return details are missing or invalid.", [...new Set(fields)]))
       : ok(undefined);
   }
 

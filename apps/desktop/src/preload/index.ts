@@ -43,6 +43,8 @@ import type {
   PurchaseListContract,
   PurchaseListRequest,
   PurchaseReceiveContract,
+  PurchaseReturnContract,
+  PurchaseReturnPayload,
   PurchaseSaveDraftContract,
   ReportsSummaryContract,
   PurchaseWritePayload,
@@ -54,6 +56,8 @@ import type {
   SaleListContract,
   SaleListRequest,
   SaleReceiptContract,
+  SaleReturnContract,
+  SaleReturnPayload,
   SaleSaveDraftContract,
   SaleWritePayload,
   SalesDashboardContract,
@@ -244,7 +248,9 @@ const purchasesApi = {
   receive: (id: string): Promise<PurchaseReceiveContract["response"]> =>
     request<PurchaseReceiveContract["response"]>("orix:purchases.receive", { id }),
   cancel: (id: string, reason: string): Promise<PurchaseCancelContract["response"]> =>
-    request<PurchaseCancelContract["response"]>("orix:purchases.cancel", { id, reason })
+    request<PurchaseCancelContract["response"]>("orix:purchases.cancel", { id, reason }),
+  returnPurchase: (payload: PurchaseReturnPayload): Promise<PurchaseReturnContract["response"]> =>
+    request<PurchaseReturnContract["response"]>("orix:purchases.return", payload)
 };
 
 const salesApi = {
@@ -260,6 +266,8 @@ const salesApi = {
     request<SaleCompleteContract["response"]>("orix:sales.complete", payload),
   cancel: (id: string, reason: string): Promise<SaleCancelContract["response"]> =>
     request<SaleCancelContract["response"]>("orix:sales.cancel", { id, reason }),
+  returnSale: (payload: SaleReturnPayload): Promise<SaleReturnContract["response"]> =>
+    request<SaleReturnContract["response"]>("orix:sales.return", payload),
   receipt: (saleId: string): Promise<SaleReceiptContract["response"]> =>
     request<SaleReceiptContract["response"]>("orix:sales.receipt", { saleId }),
   dashboard: (): Promise<SalesDashboardContract["response"]> =>

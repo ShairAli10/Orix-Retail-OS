@@ -19,11 +19,15 @@ import { ledgerTransactions } from "./ledger-transactions.js";
 import { paymentMethods } from "./payment-methods.js";
 import { permissions } from "./permissions.js";
 import { products } from "./products.js";
+import { purchaseReturnItems } from "./purchase-return-items.js";
+import { purchaseReturns } from "./purchase-returns.js";
 import { purchaseItems } from "./purchase-items.js";
 import { purchases } from "./purchases.js";
 import { rolePermissions } from "./role-permissions.js";
 import { roles } from "./roles.js";
 import { saleItems } from "./sale-items.js";
+import { salesReturnItems } from "./sales-return-items.js";
+import { salesReturns } from "./sales-returns.js";
 import { sales } from "./sales.js";
 import { settings } from "./settings.js";
 import { stores } from "./stores.js";
@@ -40,6 +44,8 @@ export const storesRelations = relations(stores, ({ many }) => ({
   products: many(products),
   customers: many(customers),
   suppliers: many(suppliers),
+  salesReturns: many(salesReturns),
+  purchaseReturns: many(purchaseReturns),
   settings: many(settings),
   backups: many(backups)
 }));
@@ -49,7 +55,9 @@ export const branchesRelations = relations(branches, ({ one, many }) => ({
   businessDays: many(businessDays),
   cashAccounts: many(cashAccounts),
   sales: many(sales),
-  purchases: many(purchases)
+  purchases: many(purchases),
+  salesReturns: many(salesReturns),
+  purchaseReturns: many(purchaseReturns)
 }));
 
 export const usersRelations = relations(users, ({ one, many }) => ({
@@ -103,18 +111,22 @@ export const productsRelations = relations(products, ({ one, many }) => ({
   unit: one(units, { fields: [products.unitId], references: [units.id] }),
   saleItems: many(saleItems),
   purchaseItems: many(purchaseItems),
+  salesReturnItems: many(salesReturnItems),
+  purchaseReturnItems: many(purchaseReturnItems),
   inventoryTransactions: many(inventoryTransactions)
 }));
 
 export const customersRelations = relations(customers, ({ one, many }) => ({
   store: one(stores, { fields: [customers.storeId], references: [stores.id] }),
   sales: many(sales),
+  salesReturns: many(salesReturns),
   customerPayments: many(customerPayments)
 }));
 
 export const suppliersRelations = relations(suppliers, ({ one, many }) => ({
   store: one(stores, { fields: [suppliers.storeId], references: [stores.id] }),
   purchases: many(purchases),
+  purchaseReturns: many(purchaseReturns),
   supplierPayments: many(supplierPayments)
 }));
 
@@ -123,6 +135,8 @@ export const businessDaysRelations = relations(businessDays, ({ one, many }) => 
   branch: one(branches, { fields: [businessDays.branchId], references: [branches.id] }),
   sales: many(sales),
   purchases: many(purchases),
+  salesReturns: many(salesReturns),
+  purchaseReturns: many(purchaseReturns),
   cashSessions: many(cashSessions)
 }));
 
@@ -162,13 +176,42 @@ export const salesRelations = relations(sales, ({ one, many }) => ({
   branch: one(branches, { fields: [sales.branchId], references: [branches.id] }),
   businessDay: one(businessDays, { fields: [sales.businessDayId], references: [businessDays.id] }),
   customer: one(customers, { fields: [sales.customerId], references: [customers.id] }),
-  items: many(saleItems)
+  items: many(saleItems),
+  returns: many(salesReturns)
 }));
 
-export const saleItemsRelations = relations(saleItems, ({ one }) => ({
+export const saleItemsRelations = relations(saleItems, ({ one, many }) => ({
   sale: one(sales, { fields: [saleItems.saleId], references: [sales.id] }),
   product: one(products, { fields: [saleItems.productId], references: [products.id] }),
-  unit: one(units, { fields: [saleItems.unitId], references: [units.id] })
+  unit: one(units, { fields: [saleItems.unitId], references: [units.id] }),
+  returns: many(salesReturnItems)
+}));
+
+export const salesReturnsRelations = relations(salesReturns, ({ one, many }) => ({
+  store: one(stores, { fields: [salesReturns.storeId], references: [stores.id] }),
+  branch: one(branches, { fields: [salesReturns.branchId], references: [branches.id] }),
+  businessDay: one(businessDays, {
+    fields: [salesReturns.businessDayId],
+    references: [businessDays.id]
+  }),
+  originalSale: one(sales, { fields: [salesReturns.originalSaleId], references: [sales.id] }),
+  customer: one(customers, { fields: [salesReturns.customerId], references: [customers.id] }),
+  items: many(salesReturnItems)
+}));
+
+export const salesReturnItemsRelations = relations(salesReturnItems, ({ one }) => ({
+  salesReturn: one(salesReturns, {
+    fields: [salesReturnItems.salesReturnId],
+    references: [salesReturns.id]
+  }),
+  saleItem: one(saleItems, {
+    fields: [salesReturnItems.saleItemId],
+    references: [saleItems.id]
+  }),
+  product: one(products, {
+    fields: [salesReturnItems.productId],
+    references: [products.id]
+  })
 }));
 
 export const purchasesRelations = relations(purchases, ({ one, many }) => ({
@@ -179,13 +222,48 @@ export const purchasesRelations = relations(purchases, ({ one, many }) => ({
     references: [businessDays.id]
   }),
   supplier: one(suppliers, { fields: [purchases.supplierId], references: [suppliers.id] }),
-  items: many(purchaseItems)
+  items: many(purchaseItems),
+  returns: many(purchaseReturns)
 }));
 
-export const purchaseItemsRelations = relations(purchaseItems, ({ one }) => ({
+export const purchaseItemsRelations = relations(purchaseItems, ({ one, many }) => ({
   purchase: one(purchases, { fields: [purchaseItems.purchaseId], references: [purchases.id] }),
   product: one(products, { fields: [purchaseItems.productId], references: [products.id] }),
-  unit: one(units, { fields: [purchaseItems.unitId], references: [units.id] })
+  unit: one(units, { fields: [purchaseItems.unitId], references: [units.id] }),
+  returns: many(purchaseReturnItems)
+}));
+
+export const purchaseReturnsRelations = relations(purchaseReturns, ({ one, many }) => ({
+  store: one(stores, { fields: [purchaseReturns.storeId], references: [stores.id] }),
+  branch: one(branches, { fields: [purchaseReturns.branchId], references: [branches.id] }),
+  businessDay: one(businessDays, {
+    fields: [purchaseReturns.businessDayId],
+    references: [businessDays.id]
+  }),
+  originalPurchase: one(purchases, {
+    fields: [purchaseReturns.originalPurchaseId],
+    references: [purchases.id]
+  }),
+  supplier: one(suppliers, {
+    fields: [purchaseReturns.supplierId],
+    references: [suppliers.id]
+  }),
+  items: many(purchaseReturnItems)
+}));
+
+export const purchaseReturnItemsRelations = relations(purchaseReturnItems, ({ one }) => ({
+  purchaseReturn: one(purchaseReturns, {
+    fields: [purchaseReturnItems.purchaseReturnId],
+    references: [purchaseReturns.id]
+  }),
+  purchaseItem: one(purchaseItems, {
+    fields: [purchaseReturnItems.purchaseItemId],
+    references: [purchaseItems.id]
+  }),
+  product: one(products, {
+    fields: [purchaseReturnItems.productId],
+    references: [products.id]
+  })
 }));
 
 export const customerPaymentsRelations = relations(customerPayments, ({ one }) => ({

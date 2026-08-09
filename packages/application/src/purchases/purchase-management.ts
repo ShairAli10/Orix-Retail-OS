@@ -5,6 +5,8 @@ import type {
   PurchaseDetail,
   PurchaseListQuery,
   PurchasePage,
+  PurchaseReturnDetail,
+  PurchaseReturnWrite,
   PurchaseWrite
 } from "@orix/repositories";
 import { applicationError } from "../shared/errors.js";
@@ -12,6 +14,10 @@ import type { ApplicationServiceContext } from "../shared/service-context.js";
 
 export type PurchaseMutationOutput = {
   readonly purchase: PurchaseDetail;
+};
+
+export type PurchaseReturnOutput = {
+  readonly return: PurchaseReturnDetail;
 };
 
 const validationError = (message: string, fields?: readonly string[]): CoreError =>
@@ -105,6 +111,27 @@ export class PurchaseManagementApplicationService {
     return this.publishAfterCommit(result, events);
   }
 
+  public async returnPurchase(
+    input: PurchaseReturnWrite
+  ): Promise<CoreResult<PurchaseReturnOutput>> {
+    const validation = this.validateReturn(input);
+    if (!validation.ok) return validation;
+    const events: ApplicationEvent[] = [];
+    const timestamp = new Date().toISOString();
+    const result = await this.context.transactionRunner.run(
+      { name: "purchases.return", metadata: { actorId: input.userId } },
+      () => {
+        const purchaseReturn = this.context.repositories.purchases.returnPurchase(input);
+        if (!purchaseReturn.ok) return Promise.resolve(purchaseReturn);
+        events.push(this.event("PurchaseReturned", purchaseReturn.value.id, input, timestamp));
+        events.push(this.event("InventoryReduced", purchaseReturn.value.id, input, timestamp));
+        events.push(this.event("LedgerEntryPosted", purchaseReturn.value.id, input, timestamp));
+        return Promise.resolve(ok({ return: purchaseReturn.value }));
+      }
+    );
+    return this.publishAfterCommit(result, events);
+  }
+
   private validatePurchase(input: PurchaseWrite): CoreResult<void> {
     const fields: string[] = [];
     if (input.supplierId.trim().length === 0) fields.push("supplierId");
@@ -124,6 +151,22 @@ export class PurchaseManagementApplicationService {
     }
     return fields.length > 0
       ? err(validationError("Purchase details are missing or invalid.", [...new Set(fields)]))
+      : ok(undefined);
+  }
+
+  private validateReturn(input: PurchaseReturnWrite): CoreResult<void> {
+    const fields: string[] = [];
+    if (input.purchaseId.trim().length === 0) fields.push("purchaseId");
+    if (input.reason.trim().length < 3) fields.push("reason");
+    if (input.items.length === 0) fields.push("items");
+    for (const item of input.items) {
+      if (item.purchaseItemId.trim().length === 0) fields.push("purchaseItemId");
+      if (item.quantity <= 0) fields.push("quantity");
+    }
+    return fields.length > 0
+      ? err(
+          validationError("Purchase return details are missing or invalid.", [...new Set(fields)])
+        )
       : ok(undefined);
   }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ok, type CoreResult, type EventPublisher, type TransactionContext } from "@orix/core";
-import type { RepositoryFactory } from "@orix/repositories";
+import type { PurchaseReturnDetail, RepositoryFactory } from "@orix/repositories";
 import { PurchaseManagementApplicationService } from "./purchase-management.js";
 
 const purchase = {
@@ -37,11 +37,36 @@ const purchase = {
       unitCostMinor: 1000,
       discountMinor: 0,
       taxMinor: 0,
-      lineTotalMinor: 10000
+      lineTotalMinor: 10000,
+      returnedQuantity: 0
     }
   ],
   createdAt: "2026-01-01T00:00:00.000Z",
   createdByUserId: "user-1"
+};
+
+const purchaseReturn: PurchaseReturnDetail = {
+  id: "purchase-return-1",
+  returnNumber: "PR-000001",
+  purchaseId: purchase.id,
+  purchaseNumber: purchase.purchaseNumber,
+  supplierId: purchase.supplierId,
+  supplierName: purchase.supplierName,
+  reason: "Returned damaged stock",
+  totalValueMinor: 1000,
+  payableReductionMinor: 1000,
+  returnedAt: "2026-01-01T11:00:00.000Z",
+  items: [
+    {
+      id: "purchase-return-item-1",
+      purchaseItemId: "item-1",
+      productId: "product-1",
+      productName: "Rice",
+      quantity: 1,
+      unitCostMinor: 1000,
+      lineTotalMinor: 1000
+    }
+  ]
 };
 
 const context = () => {
@@ -49,7 +74,8 @@ const context = () => {
   let transactionCount = 0;
   const repositories = {
     purchases: {
-      receivePurchase: () => ok(purchase)
+      receivePurchase: () => ok(purchase),
+      returnPurchase: () => ok(purchaseReturn)
     }
   } as unknown as RepositoryFactory;
 
@@ -89,5 +115,22 @@ describe("PurchaseManagementApplicationService", () => {
     expect(result.ok).toBe(true);
     expect(setup.transactionCount()).toBe(1);
     expect(setup.events).toEqual(["PurchaseReceived", "InventoryIncreasedFromPurchase"]);
+  });
+
+  it("returns purchase in a transaction and publishes return events", async () => {
+    const setup = context();
+    const result = await setup.service.returnPurchase({
+      purchaseId: "purchase-1",
+      storeId: "store-1",
+      branchId: "branch-1",
+      businessDayId: "day-1",
+      userId: "user-1",
+      reason: "Returned damaged stock",
+      items: [{ purchaseItemId: "item-1", quantity: 1 }]
+    });
+
+    expect(result.ok).toBe(true);
+    expect(setup.transactionCount()).toBe(1);
+    expect(setup.events).toEqual(["PurchaseReturned", "InventoryReduced", "LedgerEntryPosted"]);
   });
 });

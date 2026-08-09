@@ -38,6 +38,7 @@ import type {
   PurchaseItemPayload,
   PurchaseListItemDto,
   PurchaseListRequest,
+  PurchaseReturnPayload,
   PurchaseWritePayload,
   ReportsSummaryDto,
   RoleName,
@@ -48,6 +49,8 @@ import type {
   SaleListItemDto,
   SaleListRequest,
   SalePaymentType,
+  SaleReturnCondition,
+  SaleReturnPayload,
   SaleWritePayload,
   SalesDashboardDto,
   SetupStorePayload,
@@ -278,6 +281,12 @@ type PurchaseFormState = {
   readonly expectedUpdatedAt?: string | null;
 };
 
+type PurchaseReturnFormState = {
+  readonly purchase: PurchaseDetailDto;
+  readonly reason: string;
+  readonly quantities: Readonly<Record<string, string>>;
+};
+
 type PosCartItem = {
   readonly productId: string;
   readonly productName: string;
@@ -303,6 +312,14 @@ type SaleFormState = {
   readonly holdReason: string;
   readonly items: readonly PosCartItem[];
   readonly expectedUpdatedAt?: string | null;
+};
+
+type SaleReturnFormState = {
+  readonly sale: SaleDetailDto;
+  readonly reason: string;
+  readonly refundMethod: SaleReturnPayload["refundMethod"];
+  readonly quantities: Readonly<Record<string, string>>;
+  readonly conditions: Readonly<Record<string, SaleReturnCondition>>;
 };
 
 type ToastState = {
@@ -3259,6 +3276,8 @@ const SalesModule = ({
   const [detail, setDetail] = useState<SaleDetailDto | null>(null);
   const [receipt, setReceipt] = useState<ReceiptDto | null>(null);
   const canPrint = permissions.includes("sales.print");
+  const canReturn = permissions.includes("sales.return");
+  const [returnForm, setReturnForm] = useState<SaleReturnFormState | null>(null);
   const totalPages = Math.max(1, Math.ceil(totalItems / query.pageSize));
 
   const loadSales = useCallback(async () => {
@@ -3285,6 +3304,52 @@ const SalesModule = ({
     const response = await window.orix.sales.receipt(id);
     if (response.ok) setReceipt(response.value);
     else showToast(response.error.message, "error");
+  };
+
+  const openReturn = async (id: string) => {
+    const response = await window.orix.sales.get(id);
+    if (!response.ok || response.value === undefined) {
+      showToast(response.ok ? "Sale was not found." : response.error.message, "error");
+      return;
+    }
+    const sale = response.value;
+    setReturnForm({
+      sale,
+      reason: "",
+      refundMethod: sale.customerId === null ? "cash" : "customer-credit",
+      quantities: Object.fromEntries(
+        sale.items
+          .filter((item) => item.quantity - item.returnedQuantity > 0)
+          .map((item) => [item.id, "0"])
+      ),
+      conditions: Object.fromEntries(sale.items.map((item) => [item.id, "sellable"]))
+    });
+  };
+
+  const submitReturn = async () => {
+    if (returnForm === null) return;
+    const items = returnForm.sale.items
+      .map((item) => ({
+        saleItemId: item.id,
+        quantity: Number(returnForm.quantities[item.id] ?? "0"),
+        condition: returnForm.conditions[item.id] ?? "sellable"
+      }))
+      .filter((item) => item.quantity > 0);
+    const payload: SaleReturnPayload = {
+      saleId: returnForm.sale.id,
+      reason: returnForm.reason,
+      refundMethod: returnForm.refundMethod,
+      items
+    };
+    const response = await window.orix.sales.returnSale(payload);
+    if (response.ok) {
+      setReturnForm(null);
+      showToast(`Return ${response.value.return.returnNumber} posted.`);
+      await loadSales();
+      await loadDetail(returnForm.sale.id);
+    } else {
+      showToast(response.error.message, "error");
+    }
   };
 
   return (
@@ -3369,6 +3434,12 @@ const SalesModule = ({
                       >
                         Reprint
                       </button>
+                      <button
+                        disabled={!canReturn || sale.status !== "completed"}
+                        onClick={() => void openReturn(sale.id)}
+                      >
+                        Return
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -3403,6 +3474,16 @@ const SalesModule = ({
           onClose={() => {
             setReceipt(null);
           }}
+        />
+      )}
+      {returnForm === null ? null : (
+        <SaleReturnDialog
+          form={returnForm}
+          onChange={setReturnForm}
+          onClose={() => {
+            setReturnForm(null);
+          }}
+          onSubmit={() => void submitReturn()}
         />
       )}
     </section>
@@ -3462,6 +3543,125 @@ const SaleDetailsDrawer = ({
     </aside>
   </div>
 );
+
+const SaleReturnDialog = ({
+  form,
+  onChange,
+  onClose,
+  onSubmit
+}: {
+  readonly form: SaleReturnFormState;
+  readonly onChange: (form: SaleReturnFormState) => void;
+  readonly onClose: () => void;
+  readonly onSubmit: () => void;
+}) => {
+  const selectedItems = form.sale.items
+    .map((item) => ({
+      item,
+      quantity: Number(form.quantities[item.id] ?? "0"),
+      condition: form.conditions[item.id] ?? "sellable"
+    }))
+    .filter((entry) => entry.quantity > 0);
+  const totalMinor = selectedItems.reduce(
+    (total, entry) => total + entry.quantity * entry.item.unitPriceMinor,
+    0
+  );
+  const canSubmit = form.reason.trim().length >= 3 && totalMinor > 0;
+  return (
+    <div className="modal-backdrop">
+      <section className="modal return-modal">
+        <header>
+          <div>
+            <p className="eyebrow">Sales Return</p>
+            <h2>{form.sale.saleNumber}</h2>
+            <span>{form.sale.customerName ?? "Walk-in Customer"}</span>
+          </div>
+          <button onClick={onClose}>Close</button>
+        </header>
+        <div className="return-summary">
+          <Metric label="Refund" value={money(totalMinor)} />
+          <label>
+            Refund Method
+            <select
+              value={form.refundMethod}
+              onChange={(event) => {
+                onChange({
+                  ...form,
+                  refundMethod: event.target.value as SaleReturnPayload["refundMethod"]
+                });
+              }}
+            >
+              <option value="cash">Cash refund</option>
+              <option value="customer-credit" disabled={form.sale.customerId === null}>
+                Reduce customer balance
+              </option>
+            </select>
+          </label>
+        </div>
+        <div className="return-lines">
+          {form.sale.items.map((item) => {
+            const available = item.quantity - item.returnedQuantity;
+            return (
+              <div className="return-line" key={item.id}>
+                <div>
+                  <strong>{item.productName}</strong>
+                  <span>
+                    Sold {item.quantity} · Returned {item.returnedQuantity} · Available {available}
+                  </span>
+                </div>
+                <input
+                  type="number"
+                  min={0}
+                  max={available}
+                  value={form.quantities[item.id] ?? "0"}
+                  disabled={available <= 0}
+                  onChange={(event) => {
+                    onChange({
+                      ...form,
+                      quantities: { ...form.quantities, [item.id]: event.target.value }
+                    });
+                  }}
+                />
+                <select
+                  value={form.conditions[item.id] ?? "sellable"}
+                  disabled={available <= 0}
+                  onChange={(event) => {
+                    onChange({
+                      ...form,
+                      conditions: {
+                        ...form.conditions,
+                        [item.id]: event.target.value as SaleReturnCondition
+                      }
+                    });
+                  }}
+                >
+                  <option value="sellable">Return to stock</option>
+                  <option value="damaged">Do not restock</option>
+                </select>
+              </div>
+            );
+          })}
+        </div>
+        <label>
+          Reason *
+          <textarea
+            value={form.reason}
+            placeholder="Example: Customer returned damaged item"
+            onChange={(event) => {
+              onChange({ ...form, reason: event.target.value });
+            }}
+          />
+        </label>
+        <footer>
+          <button onClick={onClose}>Back</button>
+          <button className="primary" disabled={!canSubmit} onClick={onSubmit}>
+            Post Return
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+};
 
 const saleTotals = (
   form: SaleFormState
@@ -4385,10 +4585,12 @@ const PurchaseModule = ({
   const [detail, setDetail] = useState<PurchaseDetailDto | null>(null);
   const [cancelTarget, setCancelTarget] = useState<PurchaseListItemDto | null>(null);
   const [cancelReason, setCancelReason] = useState("");
+  const [returnForm, setReturnForm] = useState<PurchaseReturnFormState | null>(null);
   const canCreate = permissions.includes("purchases.create");
   const canEdit = permissions.includes("purchases.edit");
   const canReceive = permissions.includes("purchases.receive");
   const canCancel = permissions.includes("purchases.cancel");
+  const canReturn = permissions.includes("purchases.return");
   const totalPages = Math.max(1, Math.ceil(totalItems / query.pageSize));
 
   const loadPurchases = useCallback(async () => {
@@ -4530,6 +4732,47 @@ const PurchaseModule = ({
       setCancelReason("");
       showToast("Purchase cancelled.");
       await loadPurchases();
+    } else {
+      showToast(response.error.message, "error");
+    }
+  };
+
+  const openReturn = async (id: string) => {
+    const response = await window.orix.purchases.get(id);
+    if (!response.ok || response.value === undefined) {
+      showToast(response.ok ? "Purchase was not found." : response.error.message, "error");
+      return;
+    }
+    setReturnForm({
+      purchase: response.value,
+      reason: "",
+      quantities: Object.fromEntries(
+        response.value.items
+          .filter((item) => item.quantity - item.returnedQuantity > 0)
+          .map((item) => [item.id, "0"])
+      )
+    });
+  };
+
+  const submitReturn = async () => {
+    if (returnForm === null) return;
+    const items = returnForm.purchase.items
+      .map((item) => ({
+        purchaseItemId: item.id,
+        quantity: Number(returnForm.quantities[item.id] ?? "0")
+      }))
+      .filter((item) => item.quantity > 0);
+    const payload: PurchaseReturnPayload = {
+      purchaseId: returnForm.purchase.id,
+      reason: returnForm.reason,
+      items
+    };
+    const response = await window.orix.purchases.returnPurchase(payload);
+    if (response.ok) {
+      setReturnForm(null);
+      showToast(`Return ${response.value.return.returnNumber} posted.`);
+      await loadPurchases();
+      await loadDetail(returnForm.purchase.id);
     } else {
       showToast(response.error.message, "error");
     }
@@ -4691,6 +4934,12 @@ const PurchaseModule = ({
                       >
                         Cancel
                       </button>
+                      <button
+                        disabled={!canReturn || purchase.status !== "received"}
+                        onClick={() => void openReturn(purchase.id)}
+                      >
+                        Return
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -4766,6 +5015,16 @@ const PurchaseModule = ({
             </footer>
           </section>
         </div>
+      )}
+      {returnForm === null ? null : (
+        <PurchaseReturnDialog
+          form={returnForm}
+          onChange={setReturnForm}
+          onClose={() => {
+            setReturnForm(null);
+          }}
+          onSubmit={() => void submitReturn()}
+        />
       )}
     </section>
   );
@@ -5114,6 +5373,94 @@ const PurchaseDetailsDrawer = ({
     </aside>
   </div>
 );
+
+const PurchaseReturnDialog = ({
+  form,
+  onChange,
+  onClose,
+  onSubmit
+}: {
+  readonly form: PurchaseReturnFormState;
+  readonly onChange: (form: PurchaseReturnFormState) => void;
+  readonly onClose: () => void;
+  readonly onSubmit: () => void;
+}) => {
+  const selectedItems = form.purchase.items
+    .map((item) => ({
+      item,
+      quantity: Number(form.quantities[item.id] ?? "0")
+    }))
+    .filter((entry) => entry.quantity > 0);
+  const totalMinor = selectedItems.reduce(
+    (total, entry) => total + entry.quantity * entry.item.unitCostMinor,
+    0
+  );
+  const canSubmit = form.reason.trim().length >= 3 && totalMinor > 0;
+  return (
+    <div className="modal-backdrop">
+      <section className="modal return-modal">
+        <header>
+          <div>
+            <p className="eyebrow">Supplier Return</p>
+            <h2>{form.purchase.purchaseNumber}</h2>
+            <span>{form.purchase.supplierName}</span>
+          </div>
+          <button onClick={onClose}>Close</button>
+        </header>
+        <div className="return-summary">
+          <Metric label="Supplier Credit" value={money(totalMinor)} />
+          <Metric label="Items" value={String(selectedItems.length)} />
+        </div>
+        <div className="return-lines">
+          {form.purchase.items.map((item) => {
+            const available = item.quantity - item.returnedQuantity;
+            return (
+              <div className="return-line" key={item.id}>
+                <div>
+                  <strong>{item.productName}</strong>
+                  <span>
+                    Received {item.quantity} · Returned {item.returnedQuantity} · Available{" "}
+                    {available}
+                  </span>
+                </div>
+                <input
+                  type="number"
+                  min={0}
+                  max={available}
+                  value={form.quantities[item.id] ?? "0"}
+                  disabled={available <= 0}
+                  onChange={(event) => {
+                    onChange({
+                      ...form,
+                      quantities: { ...form.quantities, [item.id]: event.target.value }
+                    });
+                  }}
+                />
+                <span className="strong">{money(item.unitCostMinor)}</span>
+              </div>
+            );
+          })}
+        </div>
+        <label>
+          Reason *
+          <textarea
+            value={form.reason}
+            placeholder="Example: Returned damaged stock to supplier"
+            onChange={(event) => {
+              onChange({ ...form, reason: event.target.value });
+            }}
+          />
+        </label>
+        <footer>
+          <button onClick={onClose}>Back</button>
+          <button className="primary" disabled={!canSubmit} onClick={onSubmit}>
+            Post Return
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+};
 
 const purchaseFormTotal = (form: PurchaseFormState): number =>
   form.items.reduce(

@@ -92,6 +92,7 @@ export type PurchaseItem = {
   readonly discountMinor: number;
   readonly taxMinor: number;
   readonly lineTotalMinor: number;
+  readonly returnedQuantity: number;
 };
 
 export type PurchaseDetail = PurchaseListItem & {
@@ -104,6 +105,45 @@ export type PurchaseDetail = PurchaseListItem & {
   readonly items: readonly PurchaseItem[];
   readonly createdAt: string;
   readonly createdByUserId: string;
+};
+
+export type PurchaseReturnItemWrite = {
+  readonly purchaseItemId: string;
+  readonly quantity: number;
+};
+
+export type PurchaseReturnWrite = {
+  readonly purchaseId: string;
+  readonly storeId: string;
+  readonly branchId: string;
+  readonly businessDayId: string;
+  readonly userId: string;
+  readonly reason: string;
+  readonly items: readonly PurchaseReturnItemWrite[];
+};
+
+export type PurchaseReturnItem = {
+  readonly id: string;
+  readonly purchaseItemId: string;
+  readonly productId: string;
+  readonly productName: string;
+  readonly quantity: number;
+  readonly unitCostMinor: number;
+  readonly lineTotalMinor: number;
+};
+
+export type PurchaseReturnDetail = {
+  readonly id: string;
+  readonly returnNumber: string;
+  readonly purchaseId: string;
+  readonly purchaseNumber: string;
+  readonly supplierId: string;
+  readonly supplierName: string;
+  readonly reason: string;
+  readonly totalValueMinor: number;
+  readonly payableReductionMinor: number;
+  readonly returnedAt: string;
+  readonly items: readonly PurchaseReturnItem[];
 };
 
 export type PurchasePage = {
@@ -146,10 +186,14 @@ type PurchaseItemRow = {
   readonly discountMinor: number | null;
   readonly taxMinor: number | null;
   readonly lineTotalMinor: number;
+  readonly returnedQuantity: number | null;
 };
 
 type CountRow = { readonly count: number };
 type IdRow = { readonly id: string };
+type MoneyRow = { readonly amount: number | null };
+type PurchaseReturnRow = Omit<PurchaseReturnDetail, "items">;
+type PurchaseReturnItemRow = PurchaseReturnItem;
 
 const defaultMetadata: PurchaseMetadata = {
   invoiceNumber: null,
@@ -373,6 +417,185 @@ export class PurchaseRepository extends BaseRepository<typeof purchases> {
     }
   }
 
+  public returnPurchase(input: PurchaseReturnWrite): CoreResult<PurchaseReturnDetail> {
+    try {
+      const purchase = this.getPurchase(input.purchaseId);
+      if (!purchase.ok) return purchase;
+      if (purchase.value === undefined) {
+        return err(repositoryError("REPOSITORY_NOT_FOUND", "Purchase was not found"));
+      }
+      if (purchase.value.status !== "received") {
+        return err(
+          repositoryError("REPOSITORY_CONFLICT", "Only received purchases can be returned")
+        );
+      }
+      const byItem = new Map(purchase.value.items.map((item) => [item.id, item]));
+      const lines = input.items
+        .map((item) => {
+          const original = byItem.get(item.purchaseItemId);
+          if (original === undefined) return undefined;
+          const available = original.quantity - original.returnedQuantity;
+          return { requested: item, original, available };
+        })
+        .filter((line): line is NonNullable<typeof line> => line !== undefined);
+      if (lines.length !== input.items.length || lines.length === 0) {
+        return err(
+          repositoryError("REPOSITORY_CONFLICT", "Return contains invalid purchase items")
+        );
+      }
+      for (const line of lines) {
+        if (line.requested.quantity <= 0 || line.requested.quantity > line.available) {
+          return err(
+            repositoryError(
+              "REPOSITORY_CONFLICT",
+              `${line.original.productName} cannot be returned for the requested quantity`
+            )
+          );
+        }
+        const stock = this.currentStock(line.original.productId);
+        if (stock < line.requested.quantity) {
+          return err(
+            repositoryError(
+              "REPOSITORY_CONFLICT",
+              `${line.original.productName} does not have enough stock to return to supplier`
+            )
+          );
+        }
+      }
+      const timestamp = new Date().toISOString();
+      const returnId = randomUUID();
+      const returnNumber = this.nextPurchaseReturnNumber(input.branchId);
+      const totalValueMinor = lines.reduce(
+        (total, line) => total + line.requested.quantity * line.original.unitCostMinor,
+        0
+      );
+      this.connection.sqlite
+        .prepare(
+          `INSERT INTO purchase_returns (
+            id, store_id, branch_id, business_day_id, original_purchase_id, supplier_id,
+            return_number, status, reason, total_value_minor, payable_reduction_minor,
+            returned_at, created_at, updated_at, created_by_user_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          returnId,
+          input.storeId,
+          input.branchId,
+          input.businessDayId,
+          purchase.value.id,
+          purchase.value.supplierId,
+          returnNumber,
+          input.reason.trim(),
+          totalValueMinor,
+          totalValueMinor,
+          timestamp,
+          timestamp,
+          timestamp,
+          input.userId
+        );
+      for (const line of lines) {
+        const lineTotalMinor = line.requested.quantity * line.original.unitCostMinor;
+        this.connection.sqlite
+          .prepare(
+            `INSERT INTO purchase_return_items (
+              id, purchase_return_id, purchase_item_id, product_id, quantity, unit_cost_minor,
+              line_total_minor, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .run(
+            randomUUID(),
+            returnId,
+            line.original.id,
+            line.original.productId,
+            line.requested.quantity,
+            line.original.unitCostMinor,
+            lineTotalMinor,
+            timestamp
+          );
+        this.connection.sqlite
+          .prepare(
+            `UPDATE purchase_items
+                SET returned_quantity = COALESCE(returned_quantity, 0) + ?, updated_at = ?
+              WHERE id = ?`
+          )
+          .run(line.requested.quantity, timestamp, line.original.id);
+        this.connection.sqlite
+          .prepare(
+            `INSERT INTO inventory_transactions (
+              id, store_id, branch_id, business_day_id, product_id, source_type, source_id,
+              movement_type, direction, quantity, unit_cost_minor, reason, status,
+              posted_at, posted_by_user_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, 'purchase_return', ?, 'purchase-return', 'out', ?, ?, ?, 'posted', ?, ?, ?)`
+          )
+          .run(
+            randomUUID(),
+            input.storeId,
+            input.branchId,
+            input.businessDayId,
+            line.original.productId,
+            returnId,
+            line.requested.quantity,
+            line.original.unitCostMinor,
+            input.reason.trim(),
+            timestamp,
+            input.userId,
+            timestamp
+          );
+      }
+      this.postReturnLedger(purchase.value, input, returnId, totalValueMinor, timestamp);
+      this.writeAudit(input, "PurchaseReturned", returnId, {
+        purchaseId: purchase.value.id,
+        purchaseNumber: purchase.value.purchaseNumber,
+        returnNumber,
+        totalValueMinor,
+        reason: input.reason.trim()
+      });
+      const created = this.getPurchaseReturn(returnId);
+      return created.ok && created.value !== undefined
+        ? ok(created.value)
+        : err(repositoryError("REPOSITORY_READ_FAILED", "Failed to load purchase return"));
+    } catch (cause) {
+      return err(repositoryError("REPOSITORY_WRITE_FAILED", "Failed to return purchase", cause));
+    }
+  }
+
+  public getPurchaseReturn(id: string): CoreResult<PurchaseReturnDetail | undefined> {
+    try {
+      const row = this.connection.sqlite
+        .prepare(
+          `SELECT pr.id, pr.return_number AS returnNumber,
+                  pr.original_purchase_id AS purchaseId, p.purchase_number AS purchaseNumber,
+                  pr.supplier_id AS supplierId, s.name AS supplierName, pr.reason,
+                  pr.total_value_minor AS totalValueMinor,
+                  pr.payable_reduction_minor AS payableReductionMinor,
+                  pr.returned_at AS returnedAt
+             FROM purchase_returns pr
+             JOIN purchases p ON p.id = pr.original_purchase_id
+             JOIN suppliers s ON s.id = pr.supplier_id
+            WHERE pr.id = ?
+            LIMIT 1`
+        )
+        .get(id) as PurchaseReturnRow | undefined;
+      if (row === undefined) return ok(undefined);
+      const items = this.connection.sqlite
+        .prepare(
+          `SELECT pri.id, pri.purchase_item_id AS purchaseItemId, pri.product_id AS productId,
+                  p.name AS productName, pri.quantity, pri.unit_cost_minor AS unitCostMinor,
+                  pri.line_total_minor AS lineTotalMinor
+             FROM purchase_return_items pri
+             JOIN products p ON p.id = pri.product_id
+            WHERE pri.purchase_return_id = ?
+            ORDER BY pri.created_at ASC`
+        )
+        .all(id) as PurchaseReturnItemRow[];
+      return ok({ ...row, items });
+    } catch (cause) {
+      return err(
+        repositoryError("REPOSITORY_READ_FAILED", "Failed to load purchase return", cause)
+      );
+    }
+  }
+
   private createDraft(input: PurchaseWrite): CoreResult<PurchaseDetail> {
     try {
       const id = randomUUID();
@@ -546,7 +769,8 @@ export class PurchaseRepository extends BaseRepository<typeof purchases> {
           `SELECT pi.id, pi.product_id AS productId, p.name AS productName,
                   pi.unit_id AS unitId, u.name AS unitName, pi.quantity,
                   pi.unit_cost_minor AS unitCostMinor, pi.discount_minor AS discountMinor,
-                  pi.tax_minor AS taxMinor, pi.line_total_minor AS lineTotalMinor
+                  pi.tax_minor AS taxMinor, pi.line_total_minor AS lineTotalMinor,
+                  pi.returned_quantity AS returnedQuantity
              FROM purchase_items pi
              JOIN products p ON p.id = pi.product_id
              JOIN units u ON u.id = pi.unit_id
@@ -565,7 +789,8 @@ export class PurchaseRepository extends BaseRepository<typeof purchases> {
           unitCostMinor: row.unitCostMinor,
           discountMinor: row.discountMinor ?? 0,
           taxMinor: row.taxMinor ?? 0,
-          lineTotalMinor: row.lineTotalMinor
+          lineTotalMinor: row.lineTotalMinor,
+          returnedQuantity: row.returnedQuantity ?? 0
         }))
       );
     } catch (cause) {
@@ -729,6 +954,55 @@ export class PurchaseRepository extends BaseRepository<typeof purchases> {
     };
   }
 
+  private postReturnLedger(
+    purchase: PurchaseDetail,
+    input: PurchaseReturnWrite,
+    returnId: string,
+    totalValueMinor: number,
+    timestamp: string
+  ): void {
+    const accounts = this.ensureLedgerAccounts(input.storeId, input.userId);
+    const ledgerTransactionId = randomUUID();
+    this.connection.sqlite
+      .prepare(
+        `INSERT INTO ledger_transactions (
+          id, store_id, branch_id, business_day_id, source_type, source_id,
+          transaction_type, status, posted_at, posted_by_user_id, memo, created_at
+        ) VALUES (?, ?, ?, ?, 'purchase_return', ?, 'purchase-return', 'posted', ?, ?, ?, ?)`
+      )
+      .run(
+        ledgerTransactionId,
+        input.storeId,
+        input.branchId,
+        input.businessDayId,
+        returnId,
+        timestamp,
+        input.userId,
+        `Purchase return ${purchase.purchaseNumber}`,
+        timestamp
+      );
+    this.insertLedgerEntry(
+      ledgerTransactionId,
+      accounts.payableAccountId,
+      "liability",
+      "supplier",
+      purchase.supplierId,
+      totalValueMinor,
+      0,
+      "Supplier payable reduced"
+    );
+    this.insertLedgerEntry(
+      ledgerTransactionId,
+      accounts.inventoryAccountId,
+      "asset",
+      null,
+      null,
+      0,
+      totalValueMinor,
+      "Inventory returned to supplier"
+    );
+  }
+
   private ensureLedgerAccount(
     storeId: string,
     code: string,
@@ -787,6 +1061,27 @@ export class PurchaseRepository extends BaseRepository<typeof purchases> {
       .prepare("SELECT COUNT(*) AS count FROM purchases WHERE branch_id = ?")
       .get(branchId) as CountRow;
     return `PO-${String(row.count + 1).padStart(6, "0")}`;
+  }
+
+  private nextPurchaseReturnNumber(branchId: string): string {
+    const row = this.connection.sqlite
+      .prepare("SELECT COUNT(*) AS count FROM purchase_returns WHERE branch_id = ?")
+      .get(branchId) as CountRow;
+    return `PR-${String(row.count + 1).padStart(6, "0")}`;
+  }
+
+  private currentStock(productId: string): number {
+    return (
+      (
+        this.connection.sqlite
+          .prepare(
+            `SELECT COALESCE(SUM(CASE WHEN direction = 'in' THEN quantity ELSE -quantity END), 0) AS amount
+               FROM inventory_transactions
+              WHERE product_id = ? AND status = 'posted'`
+          )
+          .get(productId) as MoneyRow | undefined
+      )?.amount ?? 0
+    );
   }
 
   private writeAudit(

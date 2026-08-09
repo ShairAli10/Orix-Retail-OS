@@ -1,6 +1,11 @@
 import type { EventPublisher, TransactionContext } from "@orix/core";
 import { ok, type CoreResult } from "@orix/core";
-import type { ReceiptModel, RepositoryFactory, SaleDetail } from "@orix/repositories";
+import type {
+  ReceiptModel,
+  RepositoryFactory,
+  SaleDetail,
+  SaleReturnDetail
+} from "@orix/repositories";
 import { describe, expect, it } from "vitest";
 import { SaleManagementApplicationService } from "./sale-management.js";
 
@@ -36,7 +41,8 @@ const sale: SaleDetail = {
       unitPriceMinor: 5000,
       discountMinor: 0,
       taxMinor: 0,
-      lineTotalMinor: 10000
+      lineTotalMinor: 10000,
+      returnedQuantity: 0
     }
   ],
   createdAt: "2026-06-30T10:00:00.000Z",
@@ -59,6 +65,34 @@ const receipt: ReceiptModel = {
   items: [{ name: "Rice", quantity: 2, unitPriceMinor: 5000, lineTotalMinor: 10000 }]
 };
 
+const saleReturn: SaleReturnDetail = {
+  id: "return-1",
+  returnNumber: "SR-000001",
+  saleId: sale.id,
+  saleNumber: sale.saleNumber,
+  customerId: null,
+  customerName: null,
+  reason: "Customer returned item",
+  refundMethod: "cash",
+  totalRefundMinor: 5000,
+  cashRefundMinor: 5000,
+  receivableReductionMinor: 0,
+  returnedAt: "2026-06-30T10:10:00.000Z",
+  items: [
+    {
+      id: "return-item-1",
+      saleItemId: "sale-item-1",
+      productId: "product-1",
+      productName: "Rice",
+      quantity: 1,
+      condition: "sellable",
+      restockAction: "return-to-stock",
+      unitPriceMinor: 5000,
+      lineTotalMinor: 5000
+    }
+  ]
+};
+
 const transaction = (): TransactionContext => ({
   id: "tx-sale",
   depth: 0,
@@ -72,7 +106,8 @@ const createService = () => {
   const repositories = {
     sales: {
       completeSale: () => ok(sale),
-      receipt: () => ok(receipt)
+      receipt: () => ok(receipt),
+      returnSale: () => ok(saleReturn)
     },
     customers: {
       getCustomer: () =>
@@ -245,5 +280,24 @@ describe("SaleManagementApplicationService", () => {
     expect(noCustomer.ok).toBe(false);
     expect(fullCash.ok).toBe(false);
     expect(setup.transactionCount()).toBe(0);
+  });
+
+  it("returns a sale in a transaction and publishes return events", async () => {
+    const setup = createService();
+
+    const result = await setup.service.returnSale({
+      saleId: sale.id,
+      storeId: "store-1",
+      branchId: "branch-1",
+      businessDayId: "day-1",
+      userId: "user-1",
+      reason: "Customer returned item",
+      refundMethod: "cash",
+      items: [{ saleItemId: "sale-item-1", quantity: 1, condition: "sellable" }]
+    });
+
+    expect(result.ok).toBe(true);
+    expect(setup.transactionCount()).toBe(1);
+    expect(setup.events).toEqual(["SaleReturned", "InventoryIncreased", "LedgerEntryPosted"]);
   });
 });
