@@ -59,11 +59,17 @@ import type {
   SettingsGetContract,
   SettingsSaveContract,
   AppSettingsDto,
-  OspoMigrationImportContract,
-  OspoMigrationImportPayload,
-  OspoMigrationPreviewContract,
-  OspoMigrationPreviewPayload,
-  OspoMigrationSelectFilesContract,
+  BackupCreateContract,
+  BackupRestoreContract,
+  BackupSelectDirectoryContract,
+  BackupSelectFileContract,
+  BackupStatusContract,
+  BackupVerifyContract,
+  LegacyStockImportContract,
+  LegacyStockImportPayload,
+  LegacyStockImportPreviewContract,
+  LegacyStockImportPreviewPayload,
+  LegacyStockImportSelectFilesContract,
   LoginContract,
   LoginPayload,
   LockContract,
@@ -276,17 +282,40 @@ const settingsApi = {
     request<SettingsSaveContract["response"]>("orix:settings.save", payload)
 };
 
+const backupsApi = {
+  status: (): Promise<BackupStatusContract["response"]> =>
+    request<BackupStatusContract["response"]>("orix:backups.status", {}),
+  create: (): Promise<BackupCreateContract["response"]> =>
+    request<BackupCreateContract["response"]>("orix:backups.create", {}),
+  selectDirectory: (): Promise<BackupSelectDirectoryContract["response"]> =>
+    request<BackupSelectDirectoryContract["response"]>("orix:backups.select-directory", {}),
+  selectFile: (): Promise<BackupSelectFileContract["response"]> =>
+    request<BackupSelectFileContract["response"]>("orix:backups.select-file", {}),
+  verify: (filePath: string): Promise<BackupVerifyContract["response"]> =>
+    request<BackupVerifyContract["response"]>("orix:backups.verify", { filePath }),
+  restore: (
+    payload: BackupRestoreContract["request"]["payload"]
+  ): Promise<BackupRestoreContract["response"]> =>
+    request<BackupRestoreContract["response"]>("orix:backups.restore", payload)
+};
+
 const migrationApi = {
-  selectOspoFiles: (): Promise<OspoMigrationSelectFilesContract["response"]> =>
-    request<OspoMigrationSelectFilesContract["response"]>("orix:migration.ospos.select-files", {}),
-  previewOspo: (
-    payload: OspoMigrationPreviewPayload
-  ): Promise<OspoMigrationPreviewContract["response"]> =>
-    request<OspoMigrationPreviewContract["response"]>("orix:migration.ospos.preview", payload),
-  importOspo: (
-    payload: OspoMigrationImportPayload
-  ): Promise<OspoMigrationImportContract["response"]> =>
-    request<OspoMigrationImportContract["response"]>("orix:migration.ospos.import", payload)
+  selectLegacyStockFiles: (): Promise<LegacyStockImportSelectFilesContract["response"]> =>
+    request<LegacyStockImportSelectFilesContract["response"]>(
+      "orix:migration.legacy-stock.select-files",
+      {}
+    ),
+  previewLegacyStock: (
+    payload: LegacyStockImportPreviewPayload
+  ): Promise<LegacyStockImportPreviewContract["response"]> =>
+    request<LegacyStockImportPreviewContract["response"]>(
+      "orix:migration.legacy-stock.preview",
+      payload
+    ),
+  importLegacyStock: (
+    payload: LegacyStockImportPayload
+  ): Promise<LegacyStockImportContract["response"]> =>
+    request<LegacyStockImportContract["response"]>("orix:migration.legacy-stock.import", payload)
 };
 
 const inventoryApi = {
@@ -309,6 +338,7 @@ const inventoryApi = {
 contextBridge.exposeInMainWorld("orix", {
   app: appApi,
   auth: authApi,
+  backups: backupsApi,
   cashRegister: cashRegisterApi,
   customers: customersApi,
   dashboard: dashboardApi,
@@ -325,6 +355,7 @@ contextBridge.exposeInMainWorld("orix", {
 export type OrixPreloadApi = {
   readonly app: typeof appApi;
   readonly auth: typeof authApi;
+  readonly backups: typeof backupsApi;
   readonly cashRegister: typeof cashRegisterApi;
   readonly customers: typeof customersApi;
   readonly dashboard: typeof dashboardApi;

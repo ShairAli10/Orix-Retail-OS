@@ -20,7 +20,7 @@ const main = async (): Promise<void> => {
     console.log(output);
   } else {
     await writeFile(args.outputFile, `${output}\n`, "utf8");
-    console.log(`OSPOS migration preview written to ${args.outputFile}`);
+    console.log(`Legacy stock import preview written to ${args.outputFile}`);
   }
 
   const errorCount = preview.issues.filter((issue) => issue.severity === "error").length;
@@ -66,11 +66,11 @@ const parseArgs = (args: readonly string[]): CliArgs => {
 
 const printHelp = (): void => {
   console.log(`Usage:
-  pnpm migration:ospos:preview -- --items /path/ospos_items.csv --sql /path/ospos.sql --out /path/preview.json
+  pnpm migration:legacy-stock:preview -- --items /path/items.csv --sql /path/database.sql --out /path/preview.json
 
 Options:
-  --items  Required OSPOS items CSV export.
-  --sql    Optional OSPOS SQL dump. Required for current inventory quantities.
+  --items  Required previous software items CSV export.
+  --sql    Optional previous software SQL dump. Required when current inventory quantities are stored separately.
   --out    Optional JSON output path. Prints to stdout when omitted.`);
 };
 

@@ -15,7 +15,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
-    "migration:ospos:preview": "pnpm --filter @orix/migration build && node packages/migration/dist/cli/ospos-preview.js",
+    "migration:legacy-stock:preview": "pnpm --filter @orix/migration build && node packages/migration/dist/cli/ospos-preview.js",
     "prepare": "husky",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

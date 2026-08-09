@@ -94,6 +94,15 @@ const settings = {
   save: (payload) => request("orix:settings.save", payload)
 };
 
+const backups = {
+  status: () => request("orix:backups.status", {}),
+  create: () => request("orix:backups.create", {}),
+  selectDirectory: () => request("orix:backups.select-directory", {}),
+  selectFile: () => request("orix:backups.select-file", {}),
+  verify: (filePath) => request("orix:backups.verify", { filePath }),
+  restore: (payload) => request("orix:backups.restore", payload)
+};
+
 const inventory = {
   overview: () => request("orix:inventory.overview", {}),
   list: (payload) => request("orix:inventory.list", payload),
@@ -103,9 +112,9 @@ const inventory = {
 };
 
 const migration = {
-  selectOspoFiles: () => request("orix:migration.ospos.select-files", {}),
-  previewOspo: (payload) => request("orix:migration.ospos.preview", payload),
-  importOspo: (payload) => request("orix:migration.ospos.import", payload)
+  selectLegacyStockFiles: () => request("orix:migration.legacy-stock.select-files", {}),
+  previewLegacyStock: (payload) => request("orix:migration.legacy-stock.preview", payload),
+  importLegacyStock: (payload) => request("orix:migration.legacy-stock.import", payload)
 };
 
 contextBridge.exposeInMainWorld("orix", {
@@ -113,6 +122,7 @@ contextBridge.exposeInMainWorld("orix", {
     context: () => request("orix:app.context", {})
   },
   auth,
+  backups,
   cashRegister,
   customers,
   dashboard,

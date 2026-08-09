@@ -142,6 +142,53 @@ export type AppSettingsDto = {
   readonly backupLocation: string;
 };
 
+export type BackupStatus = "started" | "completed" | "failed";
+
+export type BackupRecordDto = {
+  readonly id: string;
+  readonly backupNumber: string;
+  readonly status: BackupStatus;
+  readonly fileName: string;
+  readonly filePath: string | null;
+  readonly fileSizeBytes: number | null;
+  readonly checksum: string | null;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
+  readonly verifiedAt: string | null;
+  readonly failureReason: string | null;
+};
+
+export type BackupStatusDto = {
+  readonly backupLocation: string;
+  readonly lastBackup: BackupRecordDto | null;
+  readonly recentBackups: readonly BackupRecordDto[];
+};
+
+export type BackupDirectorySelectionDto = {
+  readonly directoryPath: string | null;
+};
+
+export type BackupFileSelectionDto = {
+  readonly filePath: string | null;
+};
+
+export type BackupVerificationDto = {
+  readonly valid: boolean;
+  readonly message: string;
+  readonly checkedAt: string;
+};
+
+export type RestoreBackupPayload = {
+  readonly filePath: string;
+  readonly confirmation: string;
+};
+
+export type RestoreBackupDto = {
+  readonly restored: boolean;
+  readonly restartScheduled: boolean;
+  readonly safetyBackupPath: string;
+};
+
 export type MigrationIssueSeverity = "info" | "warning" | "error";
 
 export type MigrationIssueDto = {
@@ -152,7 +199,7 @@ export type MigrationIssueDto = {
   readonly value?: string;
 };
 
-export type OspoMigrationProductDto = {
+export type LegacyStockImportProductDto = {
   readonly sourceItemId: string;
   readonly name: string;
   readonly categoryName: string;
@@ -166,7 +213,7 @@ export type OspoMigrationProductDto = {
   readonly archived: boolean;
 };
 
-export type OspoMigrationPreviewDto = {
+export type LegacyStockImportPreviewDto = {
   readonly generatedAt: string;
   readonly source: {
     readonly itemsFile: string;
@@ -197,38 +244,39 @@ export type OspoMigrationPreviewDto = {
     readonly zeroSalePrice: number;
   };
   readonly issues: readonly MigrationIssueDto[];
-  readonly sampleProducts: readonly OspoMigrationProductDto[];
+  readonly sampleProducts: readonly LegacyStockImportProductDto[];
 };
 
-export type OspoMigrationFilesDto = {
+export type LegacyStockImportFilesDto = {
+  readonly selectedFiles: readonly string[];
   readonly itemsFile: string | null;
   readonly sqlFile: string | null;
 };
 
-export type OspoMigrationPreviewPayload = {
+export type LegacyStockImportPreviewPayload = {
   readonly itemsFile: string;
   readonly sqlFile?: string;
 };
 
-export type OspoMigrationImportPayload = {
+export type LegacyStockImportPayload = {
   readonly itemsFile: string;
   readonly sqlFile: string;
   readonly mode: "valid-only" | "strict";
 };
 
-export type OspoMigrationSkippedProductDto = {
+export type LegacyStockImportSkippedProductDto = {
   readonly sourceItemId: string;
   readonly name: string;
   readonly reason: string;
 };
 
-export type OspoMigrationImportResultDto = {
+export type LegacyStockImportResultDto = {
   readonly importedAt: string;
   readonly createdCategories: number;
   readonly createdUnits: number;
   readonly createdProducts: number;
   readonly openingStockTransactions: number;
-  readonly skippedProducts: readonly OspoMigrationSkippedProductDto[];
+  readonly skippedProducts: readonly LegacyStockImportSkippedProductDto[];
 };
 
 export type MigrationIpcError = {
@@ -1151,24 +1199,66 @@ export type SettingsSaveContract = IpcContract<
   AppIpcError
 >;
 
-export type OspoMigrationSelectFilesContract = IpcContract<
-  "orix:migration.ospos.select-files",
+export type BackupStatusContract = IpcContract<
+  "orix:backups.status",
   Record<string, never>,
-  OspoMigrationFilesDto,
+  BackupStatusDto,
+  AppIpcError
+>;
+
+export type BackupCreateContract = IpcContract<
+  "orix:backups.create",
+  Record<string, never>,
+  BackupRecordDto,
+  AppIpcError
+>;
+
+export type BackupSelectDirectoryContract = IpcContract<
+  "orix:backups.select-directory",
+  Record<string, never>,
+  BackupDirectorySelectionDto,
+  AppIpcError
+>;
+
+export type BackupSelectFileContract = IpcContract<
+  "orix:backups.select-file",
+  Record<string, never>,
+  BackupFileSelectionDto,
+  AppIpcError
+>;
+
+export type BackupVerifyContract = IpcContract<
+  "orix:backups.verify",
+  { readonly filePath: string },
+  BackupVerificationDto,
+  AppIpcError
+>;
+
+export type BackupRestoreContract = IpcContract<
+  "orix:backups.restore",
+  RestoreBackupPayload,
+  RestoreBackupDto,
+  AppIpcError
+>;
+
+export type LegacyStockImportSelectFilesContract = IpcContract<
+  "orix:migration.legacy-stock.select-files",
+  Record<string, never>,
+  LegacyStockImportFilesDto,
   MigrationIpcError
 >;
 
-export type OspoMigrationPreviewContract = IpcContract<
-  "orix:migration.ospos.preview",
-  OspoMigrationPreviewPayload,
-  OspoMigrationPreviewDto,
+export type LegacyStockImportPreviewContract = IpcContract<
+  "orix:migration.legacy-stock.preview",
+  LegacyStockImportPreviewPayload,
+  LegacyStockImportPreviewDto,
   MigrationIpcError
 >;
 
-export type OspoMigrationImportContract = IpcContract<
-  "orix:migration.ospos.import",
-  OspoMigrationImportPayload,
-  OspoMigrationImportResultDto,
+export type LegacyStockImportContract = IpcContract<
+  "orix:migration.legacy-stock.import",
+  LegacyStockImportPayload,
+  LegacyStockImportResultDto,
   MigrationIpcError
 >;
 
@@ -1486,9 +1576,9 @@ export type OrixIpcContract =
   | DashboardGetContract
   | SettingsGetContract
   | SettingsSaveContract
-  | OspoMigrationSelectFilesContract
-  | OspoMigrationPreviewContract
-  | OspoMigrationImportContract
+  | LegacyStockImportSelectFilesContract
+  | LegacyStockImportPreviewContract
+  | LegacyStockImportContract
   | AuthStatusContract
   | SetupStoreContract
   | LoginContract

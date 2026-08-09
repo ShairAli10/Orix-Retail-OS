@@ -20,6 +20,9 @@
   --primary-strong: #115e59;
   --danger: #b91c1c;
   --success: #166534;
+  --success-soft: #dcfce7;
+  --warning: #a16207;
+  --warning-soft: #fef3c7;
   --sidebar-bg: #ffffff;
   --sidebar-text: #1f2937;
   --sidebar-muted: #64748b;
@@ -43,6 +46,9 @@
   --primary-strong: #115e59;
   --danger: #b91c1c;
   --success: #166534;
+  --success-soft: #dcfce7;
+  --warning: #a16207;
+  --warning-soft: #fef3c7;
   --sidebar-bg: #ffffff;
   --sidebar-text: #1f2937;
   --sidebar-muted: #64748b;
@@ -66,6 +72,9 @@
   --primary-strong: #5eead4;
   --danger: #fca5a5;
   --success: #86efac;
+  --success-soft: rgb(34 197 94 / 0.14);
+  --warning: #facc15;
+  --warning-soft: rgb(250 204 21 / 0.14);
   --sidebar-bg: #172033;
   --sidebar-text: #eef4fb;
   --sidebar-muted: rgb(229 231 235 / 0.62);
@@ -82,6 +91,7 @@
 body {
   margin: 0;
   overflow: hidden;
+  font-size: 14px;
 }
 
 button,
@@ -96,7 +106,7 @@ button {
   background: var(--surface);
   color: var(--text);
   border-radius: 6px;
-  padding: 8px 11px;
+  padding: 7px 10px;
   cursor: pointer;
   transition:
     border-color 0.16s ease,
@@ -120,7 +130,7 @@ textarea {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 9px 10px;
+  padding: 8px 10px;
   background: var(--surface);
   color: var(--text);
   transition:
@@ -144,10 +154,35 @@ label {
   font-size: 13px;
 }
 
+.field-control {
+  align-content: start;
+}
+
 label input,
 label select,
 label textarea {
   color: var(--text);
+}
+
+.field-control.has-error input,
+.field-control.has-error select,
+.field-control.has-error textarea {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 5%, var(--surface));
+}
+
+.field-error,
+.field-help {
+  line-height: 1.35;
+  font-size: 12px;
+}
+
+.field-error {
+  color: var(--danger);
+}
+
+.field-help {
+  color: var(--muted);
 }
 
 .auth-layout {
@@ -472,6 +507,12 @@ label textarea {
   background: var(--surface-2);
 }
 
+.purchase-form-error,
+.purchase-line-error,
+.opening-row-error {
+  grid-column: 1 / -1;
+}
+
 .danger-button {
   background: color-mix(in srgb, var(--danger) 14%, var(--surface));
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
@@ -509,16 +550,16 @@ p {
 .desktop-shell {
   height: 100vh;
   display: grid;
-  grid-template-rows: 64px minmax(0, 1fr) 30px;
+  grid-template-rows: 56px minmax(0, 1fr) 28px;
   background: var(--bg);
 }
 
 .title-bar {
   display: grid;
   grid-template-columns: minmax(280px, 1fr) auto auto;
-  gap: 18px;
+  gap: 14px;
   align-items: center;
-  padding: 10px 18px;
+  padding: 8px 16px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
@@ -546,8 +587,8 @@ p {
 }
 
 .title-actions button {
-  min-height: 38px;
-  padding-inline: 14px;
+  min-height: 36px;
+  padding-inline: 12px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -583,16 +624,16 @@ p {
 }
 
 .sidebar {
-  width: 230px;
+  width: 218px;
   background: var(--sidebar-bg);
   color: var(--sidebar-text);
   border-right: 1px solid var(--sidebar-border);
-  padding: 12px;
+  padding: 10px;
   overflow: auto;
 }
 
 .sidebar.collapsed {
-  width: 76px;
+  width: 68px;
 }
 
 .nav-item {
@@ -602,7 +643,7 @@ p {
 }
 
 .sidebar-head {
-  min-height: 38px;
+  min-height: 34px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -619,8 +660,8 @@ p {
 }
 
 .sidebar-toggle {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   display: grid;
   place-items: center;
@@ -631,8 +672,8 @@ p {
 
 .nav-section {
   display: grid;
-  gap: 5px;
-  padding: 9px 0;
+  gap: 4px;
+  padding: 8px 0;
   border-top: 1px solid var(--sidebar-border);
 }
 
@@ -651,10 +692,10 @@ p {
 
 .nav-item {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: 32px minmax(0, 1fr);
   align-items: center;
   text-align: left;
-  min-height: 42px;
+  min-height: 38px;
   width: 100%;
   border-radius: 8px;
 }
@@ -674,8 +715,8 @@ p {
 .nav-icon {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border-radius: 6px;
   background: var(--sidebar-icon);
   font-size: 11px;
@@ -734,13 +775,13 @@ p {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 18px 22px;
+  padding: 14px 18px;
 }
 
 .status-bar {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   padding: 0 12px;
   color: var(--muted);
   background: var(--surface);
@@ -762,7 +803,7 @@ p {
 .page-stack,
 .product-module {
   display: grid;
-  gap: 16px;
+  gap: 14px;
 }
 
 .home-hero {
@@ -965,6 +1006,64 @@ p {
   gap: 12px;
 }
 
+.migration-intro {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.migration-intro span {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.migration-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.migration-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.migration-step > span {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.migration-step.complete > span {
+  background: var(--accent);
+  color: white;
+}
+
+.migration-step strong,
+.migration-step small {
+  min-width: 0;
+}
+
+.migration-step small {
+  grid-column: 2;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
 .migration-actions {
   display: flex;
   flex-wrap: wrap;
@@ -975,6 +1074,151 @@ p {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.backup-tool {
+  display: grid;
+  gap: 14px;
+}
+
+.backup-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.backup-summary div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.backup-summary span,
+.backup-restore span,
+.backup-restore small,
+.backup-row small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.backup-badge {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.backup-badge.success {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.backup-badge.warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.backup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.backup-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.backup-actions input {
+  min-width: 160px;
+  flex: 1 1 160px;
+}
+
+.backup-recent {
+  display: grid;
+  gap: 8px;
+}
+
+.backup-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.backup-row > span:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.backup-restore {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+.migration-detection {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.migration-detection div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.migration-detection span {
+  color: var(--muted);
+}
+
+.migration-detection .found span {
+  color: var(--success);
+  font-weight: 800;
+}
+
+.migration-detection .missing span {
+  color: var(--muted);
+}
+
+.migration-files {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.migration-files summary {
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 800;
+}
+
+.migration-files span {
+  display: block;
+  padding: 6px 0;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
 }
 
 .migration-preview,
@@ -1499,9 +1743,9 @@ tbody tr:hover {
 .pos-module {
   height: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr) 340px;
   grid-template-rows: minmax(0, 1fr) auto;
-  gap: 14px;
+  gap: 12px;
 }
 
 .pos-left,
@@ -1521,9 +1765,9 @@ tbody tr:hover {
 }
 
 .pos-register-head {
-  padding: 14px;
+  padding: 12px;
   display: grid;
-  gap: 14px;
+  gap: 12px;
 }
 
 .pos-register-title {
@@ -1538,8 +1782,8 @@ tbody tr:hover {
 }
 
 .pos-register-icon {
-  width: 44px;
-  height: 44px;
+  width: 42px;
+  height: 42px;
   display: grid;
   place-items: center;
   border-radius: 8px;
@@ -1555,12 +1799,12 @@ tbody tr:hover {
 .pos-toolbar {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(260px, 0.7fr);
-  gap: 10px;
+  gap: 9px;
 }
 
 .pos-input-shell {
   position: relative;
-  min-height: 46px;
+  min-height: 42px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
@@ -1587,14 +1831,14 @@ tbody tr:hover {
 
 .pos-quick-stats {
   display: flex;
-  gap: 8px;
+  gap: 7px;
   flex-wrap: wrap;
   color: var(--muted);
   font-size: 12px;
 }
 
 .pos-quick-stats span {
-  padding: 5px 9px;
+  padding: 4px 8px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface);
@@ -1673,17 +1917,17 @@ tbody tr:hover {
   overflow: auto;
   display: grid;
   align-content: start;
-  gap: 6px;
-  padding: 0 14px 14px;
+  gap: 5px;
+  padding: 0 12px 12px;
 }
 
 .cart-line {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 132px 112px 38px;
-  gap: 10px;
+  grid-template-columns: minmax(210px, 1fr) 120px 104px 34px;
+  gap: 8px;
   align-items: center;
-  min-height: 54px;
-  padding: 8px 10px;
+  min-height: 48px;
+  padding: 7px 9px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-2);
@@ -1693,8 +1937,8 @@ tbody tr:hover {
   position: sticky;
   top: 0;
   z-index: 1;
-  min-height: 34px;
-  padding: 7px 10px;
+  min-height: 30px;
+  padding: 6px 9px;
   color: var(--muted);
   background: var(--surface);
   font-size: 12px;
@@ -1709,34 +1953,36 @@ tbody tr:hover {
 .cart-item-info {
   min-width: 0;
   display: grid;
-  gap: 2px;
+  gap: 1px;
 }
 
 .cart-item-info strong {
   overflow-wrap: anywhere;
+  line-height: 1.18;
 }
 
 .cart-item-info small {
   display: block;
   color: var(--muted);
+  font-size: 12px;
 }
 
 .quantity-control {
   display: grid;
-  grid-template-columns: 34px 54px 34px;
+  grid-template-columns: 30px 48px 30px;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .quantity-control .icon-button {
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
 }
 
 .quantity-control input {
-  height: 34px;
-  padding: 6px;
+  height: 30px;
+  padding: 5px;
   text-align: center;
 }
 
@@ -1746,9 +1992,9 @@ tbody tr:hover {
 }
 
 .pos-card {
-  padding: 14px;
+  padding: 12px;
   display: grid;
-  gap: 11px;
+  gap: 10px;
 }
 
 .pos-card h2 {
@@ -1766,7 +2012,7 @@ tbody tr:hover {
 .pos-total-banner {
   display: grid;
   gap: 4px;
-  padding: 16px;
+  padding: 14px;
   border-radius: 8px;
   color: #ffffff;
   background: var(--primary);
@@ -1780,25 +2026,25 @@ tbody tr:hover {
 }
 
 .pos-total-banner strong {
-  font-size: 34px;
+  font-size: 30px;
   line-height: 1;
 }
 
 .pos-payment-grid {
   display: grid;
-  gap: 10px;
+  gap: 9px;
 }
 
 .pos-change-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 8px;
 }
 
 .pos-change-row .detail-row {
   display: grid;
   gap: 4px;
-  padding: 10px;
+  padding: 9px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-2);
@@ -1831,9 +2077,9 @@ tbody tr:hover {
 .pos-actions .primary {
   grid-column: 1 / -1;
   font-weight: 800;
-  min-height: 58px;
-  padding: 13px;
-  font-size: 16px;
+  min-height: 50px;
+  padding: 12px;
+  font-size: 15px;
 }
 
 .pos-actions button {
@@ -1846,13 +2092,13 @@ tbody tr:hover {
 .pos-insight-strip {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 8px;
 }
 
 .pos-insight-strip div {
   display: grid;
-  gap: 5px;
-  padding: 12px;
+  gap: 4px;
+  padding: 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
@@ -1871,8 +2117,8 @@ tbody tr:hover {
 .sale-confirm-total {
   display: grid;
   gap: 6px;
-  padding: 18px;
-  margin: 0 18px 18px;
+  padding: 18px 20px;
+  margin: 0 20px 18px;
   border-radius: 8px;
   color: #ffffff;
   background: var(--primary);
@@ -1893,12 +2139,16 @@ tbody tr:hover {
 .sale-confirm-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px 16px;
-  margin: 0 18px 18px;
+  gap: 10px 18px;
+  margin: 0 20px 18px;
 }
 
 .sale-confirm-grid .detail-row {
   min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(90px, 0.8fr) minmax(0, 1.2fr);
+  gap: 10px;
+  padding: 3px 0;
 }
 
 .sale-confirm-grid .detail-row strong {
@@ -1909,9 +2159,9 @@ tbody tr:hover {
 
 .sale-confirm-lines {
   display: grid;
-  gap: 8px;
-  padding: 12px;
-  margin: 0 18px 18px;
+  gap: 7px;
+  padding: 12px 14px;
+  margin: 0 20px 18px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-2);
@@ -2066,6 +2316,89 @@ tbody tr:hover {
   color: #64748b;
 }
 
+@media (max-height: 820px) and (min-width: 1181px) {
+  .desktop-shell {
+    grid-template-rows: 50px minmax(0, 1fr) 26px;
+  }
+
+  .title-bar {
+    padding: 6px 14px;
+  }
+
+  .title-actions button {
+    min-height: 34px;
+  }
+
+  .main-content {
+    padding: 12px 16px;
+  }
+
+  .sidebar {
+    padding: 8px;
+  }
+
+  .sidebar-head {
+    min-height: 30px;
+    margin-bottom: 4px;
+  }
+
+  .nav-section {
+    padding: 6px 0;
+  }
+
+  .nav-section-label {
+    padding-bottom: 3px;
+  }
+
+  .nav-item {
+    min-height: 36px;
+  }
+
+  .pos-module {
+    gap: 10px;
+  }
+
+  .pos-left,
+  .pos-right {
+    gap: 10px;
+  }
+
+  .pos-register-head,
+  .pos-card {
+    padding: 10px;
+    gap: 9px;
+  }
+
+  .pos-register-icon {
+    width: 38px;
+    height: 38px;
+  }
+
+  .pos-input-shell {
+    min-height: 38px;
+  }
+
+  .pos-total-banner {
+    padding: 12px;
+  }
+
+  .pos-total-banner strong {
+    font-size: 27px;
+  }
+
+  .pos-actions .primary {
+    min-height: 46px;
+  }
+
+  .cart-line {
+    min-height: 44px;
+  }
+
+  .empty-state {
+    min-height: 96px;
+  }
+}
+
 @media print {
   .title-bar,
   .sidebar,
@@ -2172,5 +2505,21 @@ tbody tr:hover {
 
   .pos-right {
     overflow: visible;
+  }
+
+  .backup-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .settings-grid,
+  .migration-steps,
+  .migration-detection {
+    grid-template-columns: 1fr;
+  }
+
+  .backup-summary {
+    display: grid;
   }
 }

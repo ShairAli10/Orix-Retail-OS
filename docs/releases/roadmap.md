@@ -1,5 +1,8 @@
 # Repository Roadmap Through Version 1.0
 
+For the current implementation status, beta blockers, release blockers, and phase-by-phase
+production plan, see [Production Readiness Plan](./production-readiness.md).
+
 ## Milestone 0: Foundation
 
 - Establish monorepo structure

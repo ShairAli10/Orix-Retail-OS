@@ -3,6 +3,8 @@ import type {
   AppSettingsDto,
   AuthStatusDto,
   AuthUserDto,
+  BackupRecordDto,
+  BackupStatusDto,
   CatalogItemDto,
   CatalogItemKind,
   CustomerActivityDto,
@@ -23,8 +25,8 @@ import type {
   InventoryOverviewDto,
   MigrationIssueDto,
   OpeningStockEntryPayload,
-  OspoMigrationImportResultDto,
-  OspoMigrationPreviewDto,
+  LegacyStockImportPreviewDto,
+  LegacyStockImportResultDto,
   ProductCatalogDto,
   ProductDetailDto,
   ProductFormPayload,
@@ -62,6 +64,36 @@ import { uiClassNames } from "@orix/ui";
 import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import type { OrixPreloadApi } from "../preload/index.js";
+import {
+  catalogFormErrors,
+  customerFormErrors,
+  loginFormErrors,
+  openingStockErrors,
+  openingStockRowError,
+  paymentFormErrors,
+  productFormErrors,
+  purchaseFormErrors,
+  purchaseItemError,
+  settingsErrors,
+  setupStepErrors,
+  stockAdjustmentErrors,
+  supplierFormErrors,
+  userFormErrors,
+  validateCatalogForm,
+  validateCustomerForm,
+  validateCustomerPaymentForm,
+  validateLoginForm,
+  validateOpeningStockRows,
+  validateProductForm,
+  validatePurchaseForm,
+  validateSettingsDraft,
+  validateSetupForm,
+  validateSetupStep,
+  validateStockAdjustmentForm,
+  validateSupplierForm,
+  validateSupplierPaymentForm,
+  validateUserForm
+} from "./form-validation.js";
 import { resolveThemePreference } from "./preferences.js";
 import { pathForRoute, routeFromPath, routes, type RouteId } from "./routing.js";
 import "./styles.css";
@@ -798,10 +830,19 @@ const SetupWizard = ({
 }) => {
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<SetupWizardState>(emptySetupForm);
+  const [submittedSteps, setSubmittedSteps] = useState<ReadonlySet<number>>(() => new Set());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const errors = submittedSteps.has(step) ? setupStepErrors(form, step) : {};
 
   const finish = async () => {
+    setSubmittedSteps(new Set([1, 2, 3]));
+    const validationError = validateSetupForm(form);
+    if (validationError !== null) {
+      setError(validationError);
+      showToast(validationError, "error");
+      return;
+    }
     setSaving(true);
     setError(null);
     const payload: SetupStorePayload = { ...form };
@@ -838,6 +879,8 @@ const SetupWizard = ({
             <Field
               label="Store Name *"
               value={form.storeName}
+              error={errors.storeName}
+              required
               onChange={(storeName) => {
                 setForm({ ...form, storeName });
               }}
@@ -852,6 +895,8 @@ const SetupWizard = ({
             <Field
               label="Owner Name *"
               value={form.ownerName}
+              error={errors.ownerName}
+              required
               onChange={(ownerName) => {
                 setForm({ ...form, ownerName });
               }}
@@ -867,6 +912,7 @@ const SetupWizard = ({
               label="Email"
               type="email"
               value={form.email}
+              error={errors.email}
               onChange={(email) => {
                 setForm({ ...form, email });
               }}
@@ -874,6 +920,8 @@ const SetupWizard = ({
             <Field
               label="Currency"
               value={form.currency}
+              error={errors.currency}
+              required
               onChange={(currency) => {
                 setForm({ ...form, currency });
               }}
@@ -881,6 +929,8 @@ const SetupWizard = ({
             <Field
               label="Timezone"
               value={form.timezone}
+              error={errors.timezone}
+              required
               onChange={(timezone) => {
                 setForm({ ...form, timezone });
               }}
@@ -930,6 +980,8 @@ const SetupWizard = ({
             <Field
               label="Default Branch Name *"
               value={form.branchName}
+              error={errors.branchName}
+              required
               onChange={(branchName) => {
                 setForm({ ...form, branchName });
               }}
@@ -941,6 +993,8 @@ const SetupWizard = ({
             <Field
               label="Full Name *"
               value={form.adminFullName}
+              error={errors.adminFullName}
+              required
               onChange={(adminFullName) => {
                 setForm({ ...form, adminFullName });
               }}
@@ -948,6 +1002,8 @@ const SetupWizard = ({
             <Field
               label="Username *"
               value={form.username}
+              error={errors.username}
+              required
               onChange={(username) => {
                 setForm({ ...form, username });
               }}
@@ -956,6 +1012,8 @@ const SetupWizard = ({
               label="Password *"
               type="password"
               value={form.password}
+              error={errors.password}
+              required
               onChange={(password) => {
                 setForm({ ...form, password });
               }}
@@ -964,6 +1022,8 @@ const SetupWizard = ({
               label="Confirm Password *"
               type="password"
               value={form.confirmPassword}
+              error={errors.confirmPassword}
+              required
               onChange={(confirmPassword) => {
                 setForm({ ...form, confirmPassword });
               }}
@@ -971,7 +1031,10 @@ const SetupWizard = ({
             <Field
               label="PIN *"
               value={form.pin}
+              error={errors.pin}
+              required
               maxLength={4}
+              helperText="Use 4 digits for quick login."
               onChange={(pin) => {
                 setForm({ ...form, pin: pin.replace(/\D/g, "").slice(0, 4) });
               }}
@@ -1000,6 +1063,14 @@ const SetupWizard = ({
             <button
               className="primary"
               onClick={() => {
+                setSubmittedSteps((previous) => new Set([...previous, step]));
+                const validationError = validateSetupStep(form, step);
+                if (validationError !== null) {
+                  setError(validationError);
+                  showToast(validationError, "error");
+                  return;
+                }
+                setError(null);
                 setStep((value) => Math.min(4, value + 1));
               }}
             >
@@ -1038,9 +1109,18 @@ const LoginScreen = ({
   });
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const errors = submitted ? loginFormErrors(form, locked) : {};
 
   const submit = async () => {
+    setSubmitted(true);
+    const validationError = validateLoginForm(form, locked);
+    if (validationError !== null) {
+      setError(validationError);
+      showToast(validationError, "error");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     const response =
@@ -1083,6 +1163,8 @@ const LoginScreen = ({
           <Field
             label="Username"
             value={form.username}
+            error={errors.username}
+            required
             onChange={(username) => {
               setForm({ ...form, username });
             }}
@@ -1110,6 +1192,8 @@ const LoginScreen = ({
           <Field
             label="4 digit PIN"
             value={form.pin}
+            error={errors.pin}
+            required
             maxLength={4}
             onChange={(pin) => {
               setForm({ ...form, pin: pin.replace(/\D/g, "").slice(0, 4) });
@@ -1122,6 +1206,7 @@ const LoginScreen = ({
               <input
                 type={showPassword ? "text" : "password"}
                 value={form.password}
+                aria-invalid={errors.password === undefined ? undefined : true}
                 onChange={(event) => {
                   setForm({ ...form, password: event.target.value });
                 }}
@@ -1137,6 +1222,9 @@ const LoginScreen = ({
                 {showPassword ? "Hide" : "Show"}
               </button>
             </div>
+            {errors.password === undefined ? null : (
+              <small className="field-error">{errors.password}</small>
+            )}
           </label>
         )}
         {!locked ? (
@@ -1310,6 +1398,11 @@ const CustomerModule = ({
 
   const saveCustomer = async () => {
     if (form === null) return;
+    const validationError = validateCustomerForm(form);
+    if (validationError !== null) {
+      showToast(validationError, "error");
+      return;
+    }
     const payload: CustomerWritePayload = {
       name: form.name,
       phone: form.phone || null,
@@ -1374,6 +1467,11 @@ const CustomerModule = ({
 
   const recordPayment = async () => {
     if (paymentForm === null) return;
+    const validationError = validateCustomerPaymentForm(paymentForm);
+    if (validationError !== null) {
+      showToast(validationError, "error");
+      return;
+    }
     const response = await window.orix.customers.recordPayment({
       customerId: paymentForm.customerId,
       amountMinor: toMinor(paymentForm.amount),
@@ -1763,125 +1861,144 @@ const CustomerForm = ({
   readonly onChange: (form: CustomerFormState) => void;
   readonly onClose: () => void;
   readonly onSave: () => void;
-}) => (
-  <div className="modal-backdrop">
-    <section className="modal customer-modal">
-      <header>
-        <h2>{form.id === undefined ? "New Customer" : "Edit Customer"}</h2>
-        <button onClick={onClose}>Close</button>
-      </header>
-      <div className="form-grid">
-        <Field
-          label="Customer Name *"
-          value={form.name}
-          onChange={(name) => {
-            onChange({ ...form, name });
-          }}
-        />
-        <Field
-          label="Phone"
-          value={form.phone}
-          onChange={(phone) => {
-            onChange({ ...form, phone });
-          }}
-        />
-        <Field
-          label="Email"
-          type="email"
-          value={form.email}
-          onChange={(email) => {
-            onChange({ ...form, email });
-          }}
-        />
-        <Field
-          label="City"
-          value={form.city}
-          onChange={(city) => {
-            onChange({ ...form, city });
-          }}
-        />
-        <Field
-          label="CNIC"
-          value={form.cnic}
-          onChange={(cnic) => {
-            onChange({ ...form, cnic });
-          }}
-        />
-        <label>
-          Customer Type
-          <select
-            value={form.customerType}
-            onChange={(event) => {
-              onChange({ ...form, customerType: event.target.value as CustomerType });
+}) => {
+  const [submitted, setSubmitted] = useState(false);
+  const errors = submitted ? customerFormErrors(form) : {};
+
+  return (
+    <div className="modal-backdrop">
+      <section className="modal customer-modal">
+        <header>
+          <h2>{form.id === undefined ? "New Customer" : "Edit Customer"}</h2>
+          <button onClick={onClose}>Close</button>
+        </header>
+        <div className="form-grid">
+          <Field
+            label="Customer Name *"
+            value={form.name}
+            error={errors.name}
+            required
+            onChange={(name) => {
+              onChange({ ...form, name });
+            }}
+          />
+          <Field
+            label="Phone"
+            value={form.phone}
+            onChange={(phone) => {
+              onChange({ ...form, phone });
+            }}
+          />
+          <Field
+            label="Email"
+            type="email"
+            value={form.email}
+            error={errors.email}
+            onChange={(email) => {
+              onChange({ ...form, email });
+            }}
+          />
+          <Field
+            label="City"
+            value={form.city}
+            onChange={(city) => {
+              onChange({ ...form, city });
+            }}
+          />
+          <Field
+            label="CNIC"
+            value={form.cnic}
+            onChange={(cnic) => {
+              onChange({ ...form, cnic });
+            }}
+          />
+          <label>
+            Customer Type
+            <select
+              value={form.customerType}
+              onChange={(event) => {
+                onChange({ ...form, customerType: event.target.value as CustomerType });
+              }}
+            >
+              <option value="walk-in">Walk-in</option>
+              <option value="regular">Regular</option>
+              <option value="wholesale">Wholesale</option>
+              <option value="vip">VIP</option>
+            </select>
+          </label>
+          <Field
+            label="Credit Limit"
+            type="number"
+            value={form.creditLimit}
+            error={errors.creditLimit}
+            min={0}
+            onChange={(creditLimit) => {
+              onChange({ ...form, creditLimit });
+            }}
+          />
+          <Field
+            label="Opening Balance"
+            type="number"
+            value={form.openingBalance}
+            error={errors.openingBalance}
+            min={0}
+            onChange={(openingBalance) => {
+              onChange({ ...form, openingBalance });
+            }}
+          />
+          <label>
+            Opening Date
+            <input
+              type="date"
+              value={form.openingBalanceDate}
+              onChange={(event) => {
+                onChange({ ...form, openingBalanceDate: event.target.value });
+              }}
+            />
+          </label>
+          <Field
+            label="Tags"
+            value={form.tags}
+            onChange={(tags) => {
+              onChange({ ...form, tags });
+            }}
+          />
+          <label className="wide">
+            Address
+            <textarea
+              value={form.address}
+              onChange={(event) => {
+                onChange({ ...form, address: event.target.value });
+              }}
+            />
+          </label>
+          <label className="wide">
+            Notes
+            <textarea
+              value={form.notes}
+              onChange={(event) => {
+                onChange({ ...form, notes: event.target.value });
+              }}
+            />
+          </label>
+        </div>
+        <footer>
+          <button onClick={onClose}>Cancel</button>
+          <button
+            className="primary"
+            disabled={!canEdit}
+            onClick={() => {
+              setSubmitted(true);
+              onSave();
             }}
           >
-            <option value="walk-in">Walk-in</option>
-            <option value="regular">Regular</option>
-            <option value="wholesale">Wholesale</option>
-            <option value="vip">VIP</option>
-          </select>
-        </label>
-        <Field
-          label="Credit Limit"
-          type="number"
-          value={form.creditLimit}
-          onChange={(creditLimit) => {
-            onChange({ ...form, creditLimit });
-          }}
-        />
-        <Field
-          label="Opening Balance"
-          type="number"
-          value={form.openingBalance}
-          onChange={(openingBalance) => {
-            onChange({ ...form, openingBalance });
-          }}
-        />
-        <label>
-          Opening Date
-          <input
-            type="date"
-            value={form.openingBalanceDate}
-            onChange={(event) => {
-              onChange({ ...form, openingBalanceDate: event.target.value });
-            }}
-          />
-        </label>
-        <Field
-          label="Tags"
-          value={form.tags}
-          onChange={(tags) => {
-            onChange({ ...form, tags });
-          }}
-        />
-        <label className="wide">
-          Address
-          <textarea
-            value={form.address}
-            onChange={(event) => {
-              onChange({ ...form, address: event.target.value });
-            }}
-          />
-        </label>
-        <label className="wide">
-          Notes
-          <textarea
-            value={form.notes}
-            onChange={(event) => {
-              onChange({ ...form, notes: event.target.value });
-            }}
-          />
-        </label>
-      </div>
-      <footer>
-        <button onClick={onClose}>Cancel</button>
-        <button className="primary" disabled={!canEdit} onClick={onSave}>
-          Save Customer
-        </button>
-      </footer>
-    </section>
-  </div>
-);
+            Save Customer
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+};
 
 const CustomerPaymentDialog = ({
   form,
@@ -1893,83 +2010,103 @@ const CustomerPaymentDialog = ({
   readonly onChange: (form: CustomerPaymentFormState) => void;
   readonly onClose: () => void;
   readonly onSave: () => void;
-}) => (
-  <div className="modal-backdrop">
-    <section className="modal">
-      <header>
-        <h2>Record Payment</h2>
-        <button onClick={onClose}>Close</button>
-      </header>
-      <div className="form-grid">
-        <Field
-          label="Amount *"
-          type="number"
-          value={form.amount}
-          onChange={(amount) => {
-            onChange({ ...form, amount });
-          }}
-        />
-        <label>
-          Method
-          <select
-            value={form.paymentMethod}
-            onChange={(event) => {
-              onChange({
-                ...form,
-                paymentMethod: event.target.value as CustomerPaymentFormState["paymentMethod"]
-              });
+}) => {
+  const [submitted, setSubmitted] = useState(false);
+  const errors = submitted ? paymentFormErrors(form) : {};
+
+  return (
+    <div className="modal-backdrop">
+      <section className="modal">
+        <header>
+          <h2>Record Payment</h2>
+          <button onClick={onClose}>Close</button>
+        </header>
+        <div className="form-grid">
+          <Field
+            label="Amount *"
+            type="number"
+            value={form.amount}
+            error={errors.amount}
+            min={0}
+            required
+            onChange={(amount) => {
+              onChange({ ...form, amount });
+            }}
+          />
+          <label>
+            Method
+            <select
+              value={form.paymentMethod}
+              onChange={(event) => {
+                onChange({
+                  ...form,
+                  paymentMethod: event.target.value as CustomerPaymentFormState["paymentMethod"]
+                });
+              }}
+            >
+              <option value="cash">Cash</option>
+              <option value="bank">Bank</option>
+              <option value="jazzcash">JazzCash</option>
+              <option value="easypaisa">EasyPaisa</option>
+              <option value="card">Card</option>
+            </select>
+          </label>
+          <label
+            className={errors.paidAt === undefined ? "field-control" : "field-control has-error"}
+          >
+            Paid At
+            <input
+              type="datetime-local"
+              value={form.paidAt}
+              aria-invalid={errors.paidAt === undefined ? undefined : true}
+              onChange={(event) => {
+                onChange({ ...form, paidAt: event.target.value });
+              }}
+            />
+            {errors.paidAt === undefined ? null : (
+              <small className="field-error">{errors.paidAt}</small>
+            )}
+          </label>
+          <Field
+            label="Reference Number"
+            value={form.referenceNumber}
+            onChange={(referenceNumber) => {
+              onChange({ ...form, referenceNumber });
+            }}
+          />
+          <Field
+            label="Receipt Number"
+            value={form.receiptNumber}
+            onChange={(receiptNumber) => {
+              onChange({ ...form, receiptNumber });
+            }}
+          />
+          <label className="wide">
+            Notes
+            <textarea
+              value={form.notes}
+              onChange={(event) => {
+                onChange({ ...form, notes: event.target.value });
+              }}
+            />
+          </label>
+        </div>
+        <footer>
+          <button onClick={onClose}>Cancel</button>
+          <button
+            className="primary"
+            onClick={() => {
+              setSubmitted(true);
+              onSave();
             }}
           >
-            <option value="cash">Cash</option>
-            <option value="bank">Bank</option>
-            <option value="jazzcash">JazzCash</option>
-            <option value="easypaisa">EasyPaisa</option>
-            <option value="card">Card</option>
-          </select>
-        </label>
-        <label>
-          Paid At
-          <input
-            type="datetime-local"
-            value={form.paidAt}
-            onChange={(event) => {
-              onChange({ ...form, paidAt: event.target.value });
-            }}
-          />
-        </label>
-        <Field
-          label="Reference Number"
-          value={form.referenceNumber}
-          onChange={(referenceNumber) => {
-            onChange({ ...form, referenceNumber });
-          }}
-        />
-        <Field
-          label="Receipt Number"
-          value={form.receiptNumber}
-          onChange={(receiptNumber) => {
-            onChange({ ...form, receiptNumber });
-          }}
-        />
-        <label className="wide">
-          Notes
-          <textarea
-            value={form.notes}
-            onChange={(event) => {
-              onChange({ ...form, notes: event.target.value });
-            }}
-          />
-        </label>
-      </div>
-      <footer>
-        <button onClick={onClose}>Cancel</button>
-        <button className="primary" onClick={onSave}>
-          Record Payment
-        </button>
-      </footer>
-    </section>
-  </div>
-);
+            Record Payment
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+};
 
 const CustomerProfileDrawer = ({
   customer,
@@ -3338,6 +3475,11 @@ const SupplierModule = ({
 
   const saveSupplier = async () => {
     if (form === null) return;
+    const validationError = validateSupplierForm(form);
+    if (validationError !== null) {
+      showToast(validationError, "error");
+      return;
+    }
     const payload: SupplierWritePayload = {
       name: form.name,
       phone: form.phone || null,
@@ -3370,6 +3512,11 @@ const SupplierModule = ({
 
   const recordPayment = async () => {
     if (paymentForm === null) return;
+    const validationError = validateSupplierPaymentForm(paymentForm);
+    if (validationError !== null) {
+      showToast(validationError, "error");
+      return;
+    }
     const response = await window.orix.suppliers.recordPayment({
       supplierId: paymentForm.supplierId,
       amountMinor: toMinor(paymentForm.amount),
@@ -3631,91 +3778,143 @@ const SupplierForm = ({
   readonly onChange: (form: SupplierFormState) => void;
   readonly onClose: () => void;
   readonly onSave: () => void;
-}) => (
-  <div className="modal-backdrop">
-    <section className="modal customer-modal">
-      <header>
-        <div>
-          <p className="eyebrow">{form.id === undefined ? "New Supplier" : "Edit Supplier"}</p>
-          <h2>{form.id === undefined ? "Create supplier" : "Update supplier"}</h2>
-        </div>
-        <button onClick={onClose}>Close</button>
-      </header>
-      <div className="form-grid">
-        {(
-          [
-            ["Supplier Name *", "name"],
-            ["Phone", "phone"],
-            ["Email", "email"],
-            ["City", "city"],
-            ["NTN", "ntn"],
-            ["STRN", "strn"],
-            ["Credit Terms", "creditTerms"],
-            ["Opening Balance", "openingBalance"]
-          ] as const
-        ).map(([label, key]) => (
-          <label key={key}>
-            {label}
+}) => {
+  const [submitted, setSubmitted] = useState(false);
+  const errors = submitted ? supplierFormErrors(form) : {};
+
+  return (
+    <div className="modal-backdrop">
+      <section className="modal customer-modal">
+        <header>
+          <div>
+            <p className="eyebrow">{form.id === undefined ? "New Supplier" : "Edit Supplier"}</p>
+            <h2>{form.id === undefined ? "Create supplier" : "Update supplier"}</h2>
+          </div>
+          <button onClick={onClose}>Close</button>
+        </header>
+        <div className="form-grid">
+          <Field
+            label="Supplier Name *"
+            value={form.name}
+            error={errors.name}
+            required
+            onChange={(name) => {
+              onChange({ ...form, name });
+            }}
+          />
+          <Field
+            label="Phone"
+            value={form.phone}
+            onChange={(phone) => {
+              onChange({ ...form, phone });
+            }}
+          />
+          <Field
+            label="Email"
+            type="email"
+            value={form.email}
+            error={errors.email}
+            onChange={(email) => {
+              onChange({ ...form, email });
+            }}
+          />
+          <Field
+            label="City"
+            value={form.city}
+            onChange={(city) => {
+              onChange({ ...form, city });
+            }}
+          />
+          <Field
+            label="NTN"
+            value={form.ntn}
+            onChange={(ntn) => {
+              onChange({ ...form, ntn });
+            }}
+          />
+          <Field
+            label="STRN"
+            value={form.strn}
+            onChange={(strn) => {
+              onChange({ ...form, strn });
+            }}
+          />
+          <Field
+            label="Credit Terms"
+            value={form.creditTerms}
+            onChange={(creditTerms) => {
+              onChange({ ...form, creditTerms });
+            }}
+          />
+          <Field
+            label="Opening Balance"
+            type="number"
+            value={form.openingBalance}
+            error={errors.openingBalance}
+            min={0}
+            onChange={(openingBalance) => {
+              onChange({ ...form, openingBalance });
+            }}
+          />
+          <label>
+            Opening Date
             <input
               disabled={!canEdit}
-              value={form[key]}
+              type="date"
+              value={form.openingBalanceDate}
               onChange={(event) => {
-                onChange({ ...form, [key]: event.target.value });
+                onChange({ ...form, openingBalanceDate: event.target.value });
               }}
             />
           </label>
-        ))}
-        <label>
-          Opening Date
-          <input
+          <label>
+            Tags
+            <input
+              disabled={!canEdit}
+              value={form.tags}
+              onChange={(event) => {
+                onChange({ ...form, tags: event.target.value });
+              }}
+            />
+          </label>
+          <label className="span-2">
+            Address
+            <textarea
+              disabled={!canEdit}
+              value={form.address}
+              onChange={(event) => {
+                onChange({ ...form, address: event.target.value });
+              }}
+            />
+          </label>
+          <label className="span-2">
+            Notes
+            <textarea
+              disabled={!canEdit}
+              value={form.notes}
+              onChange={(event) => {
+                onChange({ ...form, notes: event.target.value });
+              }}
+            />
+          </label>
+        </div>
+        <footer>
+          <button onClick={onClose}>Cancel</button>
+          <button
+            className="primary"
             disabled={!canEdit}
-            type="date"
-            value={form.openingBalanceDate}
-            onChange={(event) => {
-              onChange({ ...form, openingBalanceDate: event.target.value });
+            onClick={() => {
+              setSubmitted(true);
+              onSave();
             }}
-          />
-        </label>
-        <label>
-          Tags
-          <input
-            disabled={!canEdit}
-            value={form.tags}
-            onChange={(event) => {
-              onChange({ ...form, tags: event.target.value });
-            }}
-          />
-        </label>
-        <label className="span-2">
-          Address
-          <textarea
-            disabled={!canEdit}
-            value={form.address}
-            onChange={(event) => {
-              onChange({ ...form, address: event.target.value });
-            }}
-          />
-        </label>
-        <label className="span-2">
-          Notes
-          <textarea
-            disabled={!canEdit}
-            value={form.notes}
-            onChange={(event) => {
-              onChange({ ...form, notes: event.target.value });
-            }}
-          />
-        </label>
-      </div>
-      <footer>
-        <button onClick={onClose}>Cancel</button>
-        <button className="primary" disabled={!canEdit} onClick={onSave}>
-          Save Supplier
-        </button>
-      </footer>
-    </section>
-  </div>
-);
+          >
+            Save Supplier
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+};
 
 const SupplierPaymentDialog = ({
   form,
@@ -3727,91 +3926,110 @@ const SupplierPaymentDialog = ({
   readonly onChange: (form: SupplierPaymentFormState) => void;
   readonly onClose: () => void;
   readonly onSave: () => void;
-}) => (
-  <div className="modal-backdrop">
-    <section className="modal customer-modal">
-      <header>
-        <div>
-          <p className="eyebrow">Supplier Payment</p>
-          <h2>Record payment</h2>
-        </div>
-        <button onClick={onClose}>Close</button>
-      </header>
-      <div className="form-grid">
-        <label>
-          Amount *
-          <input
+}) => {
+  const [submitted, setSubmitted] = useState(false);
+  const errors = submitted ? paymentFormErrors(form) : {};
+
+  return (
+    <div className="modal-backdrop">
+      <section className="modal customer-modal">
+        <header>
+          <div>
+            <p className="eyebrow">Supplier Payment</p>
+            <h2>Record payment</h2>
+          </div>
+          <button onClick={onClose}>Close</button>
+        </header>
+        <div className="form-grid">
+          <Field
+            label="Amount *"
+            type="number"
             value={form.amount}
-            onChange={(event) => {
-              onChange({ ...form, amount: event.target.value });
+            error={errors.amount}
+            min={0}
+            required
+            onChange={(amount) => {
+              onChange({ ...form, amount });
             }}
           />
-        </label>
-        <label>
-          Method
-          <select
-            value={form.paymentMethod}
-            onChange={(event) => {
-              onChange({
-                ...form,
-                paymentMethod: event.target.value as SupplierPaymentPayload["paymentMethod"]
-              });
+          <label>
+            Method
+            <select
+              value={form.paymentMethod}
+              onChange={(event) => {
+                onChange({
+                  ...form,
+                  paymentMethod: event.target.value as SupplierPaymentPayload["paymentMethod"]
+                });
+              }}
+            >
+              <option value="cash">Cash</option>
+              <option value="bank">Bank</option>
+              <option value="jazzcash">JazzCash</option>
+              <option value="easypaisa">EasyPaisa</option>
+              <option value="card">Card</option>
+            </select>
+          </label>
+          <label
+            className={errors.paidAt === undefined ? "field-control" : "field-control has-error"}
+          >
+            Paid At
+            <input
+              type="datetime-local"
+              value={form.paidAt}
+              aria-invalid={errors.paidAt === undefined ? undefined : true}
+              onChange={(event) => {
+                onChange({ ...form, paidAt: event.target.value });
+              }}
+            />
+            {errors.paidAt === undefined ? null : (
+              <small className="field-error">{errors.paidAt}</small>
+            )}
+          </label>
+          <label>
+            Reference
+            <input
+              value={form.referenceNumber}
+              onChange={(event) => {
+                onChange({ ...form, referenceNumber: event.target.value });
+              }}
+            />
+          </label>
+          <label>
+            Receipt
+            <input
+              value={form.receiptNumber}
+              onChange={(event) => {
+                onChange({ ...form, receiptNumber: event.target.value });
+              }}
+            />
+          </label>
+          <label className="span-2">
+            Notes
+            <textarea
+              value={form.notes}
+              onChange={(event) => {
+                onChange({ ...form, notes: event.target.value });
+              }}
+            />
+          </label>
+        </div>
+        <footer>
+          <button onClick={onClose}>Cancel</button>
+          <button
+            className="primary"
+            onClick={() => {
+              setSubmitted(true);
+              onSave();
             }}
           >
-            <option value="cash">Cash</option>
-            <option value="bank">Bank</option>
-            <option value="jazzcash">JazzCash</option>
-            <option value="easypaisa">EasyPaisa</option>
-            <option value="card">Card</option>
-          </select>
-        </label>
-        <label>
-          Paid At
-          <input
-            type="datetime-local"
-            value={form.paidAt}
-            onChange={(event) => {
-              onChange({ ...form, paidAt: event.target.value });
-            }}
-          />
-        </label>
-        <label>
-          Reference
-          <input
-            value={form.referenceNumber}
-            onChange={(event) => {
-              onChange({ ...form, referenceNumber: event.target.value });
-            }}
-          />
-        </label>
-        <label>
-          Receipt
-          <input
-            value={form.receiptNumber}
-            onChange={(event) => {
-              onChange({ ...form, receiptNumber: event.target.value });
-            }}
-          />
-        </label>
-        <label className="span-2">
-          Notes
-          <textarea
-            value={form.notes}
-            onChange={(event) => {
-              onChange({ ...form, notes: event.target.value });
-            }}
-          />
-        </label>
-      </div>
-      <footer>
-        <button onClick={onClose}>Cancel</button>
-        <button className="primary" onClick={onSave}>
-          Record Payment
-        </button>
-      </footer>
-    </section>
-  </div>
-);
+            Record Payment
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+};
 
 const SupplierProfileDrawer = ({
   supplier,
@@ -4086,6 +4304,11 @@ const PurchaseModule = ({
 
   const saveDraft = async () => {
     if (form === null) return;
+    const validationError = validatePurchaseForm(form);
+    if (validationError !== null) {
+      showToast(validationError, "error");
+      return;
+    }
     const payload: PurchaseWritePayload = {
       supplierId: form.supplierId,
       invoiceNumber: form.invoiceNumber || null,
@@ -4433,6 +4656,8 @@ const PurchaseForm = ({
   readonly onClose: () => void;
   readonly onSave: () => void;
 }) => {
+  const [submitted, setSubmitted] = useState(false);
+  const errors = submitted ? purchaseFormErrors(form) : {};
   const updateItem = (index: number, patch: Partial<PurchaseItemFormState>) => {
     onChange({
       ...form,
@@ -4452,10 +4677,15 @@ const PurchaseForm = ({
           <button onClick={onClose}>Close</button>
         </header>
         <div className="form-grid">
-          <label>
+          <label
+            className={
+              errors.supplierId === undefined ? "field-control" : "field-control has-error"
+            }
+          >
             Supplier *
             <select
               value={form.supplierId}
+              aria-invalid={errors.supplierId === undefined ? undefined : true}
               onChange={(event) => {
                 onChange({ ...form, supplierId: event.target.value });
               }}
@@ -4467,6 +4697,9 @@ const PurchaseForm = ({
                 </option>
               ))}
             </select>
+            {errors.supplierId === undefined ? null : (
+              <small className="field-error">{errors.supplierId}</small>
+            )}
           </label>
           <label>
             Invoice Number
@@ -4486,15 +4719,23 @@ const PurchaseForm = ({
               }}
             />
           </label>
-          <label>
+          <label
+            className={
+              errors.purchaseDate === undefined ? "field-control" : "field-control has-error"
+            }
+          >
             Purchase Date
             <input
               type="date"
               value={form.purchaseDate}
+              aria-invalid={errors.purchaseDate === undefined ? undefined : true}
               onChange={(event) => {
                 onChange({ ...form, purchaseDate: event.target.value });
               }}
             />
+            {errors.purchaseDate === undefined ? null : (
+              <small className="field-error">{errors.purchaseDate}</small>
+            )}
           </label>
           <label>
             Due Date
@@ -4518,6 +4759,9 @@ const PurchaseForm = ({
               Add Item
             </button>
           </div>
+          {errors.items === undefined ? null : (
+            <small className="field-error purchase-form-error">{errors.items}</small>
+          )}
           {form.items.map((item, index) => (
             <div className="purchase-line" key={`${String(index)}-${item.productId}`}>
               <select
@@ -4590,46 +4834,53 @@ const PurchaseForm = ({
               >
                 Remove
               </button>
+              {submitted && purchaseItemError(item) !== null ? (
+                <small className="field-error purchase-line-error">{purchaseItemError(item)}</small>
+              ) : null}
             </div>
           ))}
         </div>
         <div className="form-grid">
-          <label>
-            Purchase Discount
-            <input
-              value={form.discount}
-              onChange={(event) => {
-                onChange({ ...form, discount: event.target.value });
-              }}
-            />
-          </label>
-          <label>
-            Tax Placeholder
-            <input
-              value={form.tax}
-              onChange={(event) => {
-                onChange({ ...form, tax: event.target.value });
-              }}
-            />
-          </label>
-          <label>
-            Freight
-            <input
-              value={form.freight}
-              onChange={(event) => {
-                onChange({ ...form, freight: event.target.value });
-              }}
-            />
-          </label>
-          <label>
-            Other Charges
-            <input
-              value={form.otherCharges}
-              onChange={(event) => {
-                onChange({ ...form, otherCharges: event.target.value });
-              }}
-            />
-          </label>
+          <Field
+            label="Purchase Discount"
+            value={form.discount}
+            type="number"
+            min={0}
+            error={errors.discount}
+            onChange={(discount) => {
+              onChange({ ...form, discount });
+            }}
+          />
+          <Field
+            label="Tax"
+            value={form.tax}
+            type="number"
+            min={0}
+            error={errors.tax}
+            onChange={(tax) => {
+              onChange({ ...form, tax });
+            }}
+          />
+          <Field
+            label="Freight"
+            value={form.freight}
+            type="number"
+            min={0}
+            error={errors.freight}
+            onChange={(freight) => {
+              onChange({ ...form, freight });
+            }}
+          />
+          <Field
+            label="Other Charges"
+            value={form.otherCharges}
+            type="number"
+            min={0}
+            error={errors.otherCharges}
+            onChange={(otherCharges) => {
+              onChange({ ...form, otherCharges });
+            }}
+          />
           <label className="span-2">
             Notes
             <textarea
@@ -4643,7 +4894,13 @@ const PurchaseForm = ({
         <footer>
           <span className="muted-text">Grand Total {money(purchaseFormTotal(form))}</span>
           <button onClick={onClose}>Cancel</button>
-          <button className="primary" onClick={onSave}>
+          <button
+            className="primary"
+            onClick={() => {
+              setSubmitted(true);
+              onSave();
+            }}
+          >
             Save Draft
           </button>
         </footer>
@@ -4883,6 +5140,12 @@ const ProductModule = ({
     if (form === null) {
       return;
     }
+    const validationError = validateProductForm(form);
+    if (validationError !== null) {
+      setError(validationError);
+      showToast(validationError, "error");
+      return;
+    }
     const purchasePriceMinor = toMinor(form.purchasePrice);
     const salePriceMinor = toMinor(form.salePrice);
     if (salePriceMinor < purchasePriceMinor && !confirmSaleBelowPurchase) {
@@ -4937,6 +5200,12 @@ const ProductModule = ({
 
   const saveCatalog = async () => {
     if (catalogForm === null) {
+      return;
+    }
+    const validationError = validateCatalogForm(catalogForm);
+    if (validationError !== null) {
+      setError(validationError);
+      showToast(validationError, "error");
       return;
     }
     const payloadBase = {
@@ -5416,6 +5685,11 @@ const InventoryModule = ({
 
   const submitAdjustment = async () => {
     if (adjustment === null) return;
+    const validationError = validateStockAdjustmentForm(adjustment);
+    if (validationError !== null) {
+      showToast(validationError, "error");
+      return;
+    }
     const response = await window.orix.inventory.adjust({
       productId: adjustment.productId,
       direction: adjustment.direction,
@@ -5436,6 +5710,11 @@ const InventoryModule = ({
 
   const submitOpeningStock = async () => {
     const entries = [...openingStock, ...csvPreview].filter((entry) => entry.productId !== "");
+    const validationError = validateOpeningStockRows(entries);
+    if (validationError !== null) {
+      showToast(validationError, "error");
+      return;
+    }
     const payload: readonly OpeningStockEntryPayload[] = entries.map((entry) => ({
       productId: entry.productId,
       quantity: Number(entry.quantity),
@@ -6012,77 +6291,122 @@ const OpeningStockDialog = ({
   readonly onClose: () => void;
   readonly onSubmit: () => void;
 }) => (
-  <div className="modal-backdrop">
-    <section className="modal">
-      <header>
-        <h2>Opening Stock Wizard</h2>
-        <button onClick={onClose}>Close</button>
-      </header>
-      <div className="opening-stock-body">
-        <p className="muted-text">
-          Step 1: enter or import products. Step 2: review. Step 3: confirm immutable transactions.
-        </p>
-        {rows.map((row, index) => (
-          <div className="opening-row" key={index}>
-            <ProductSelect
-              value={row.productId}
-              products={products}
-              onChange={(productId) => {
-                onChange(index, { ...row, productId });
-              }}
-            />
-            <input
-              value={row.quantity}
-              type="number"
-              min="0"
-              onChange={(event) => {
-                onChange(index, { ...row, quantity: event.target.value });
-              }}
-            />
-            <input
-              value={row.unitCost}
-              type="number"
-              min="0"
-              step="0.01"
-              onChange={(event) => {
-                onChange(index, { ...row, unitCost: event.target.value });
-              }}
-            />
-            <input
-              value={row.occurredAt}
-              type="datetime-local"
-              onChange={(event) => {
-                onChange(index, { ...row, occurredAt: event.target.value });
-              }}
-            />
-            <input
-              value={row.notes}
-              placeholder="Notes"
-              onChange={(event) => {
-                onChange(index, { ...row, notes: event.target.value });
-              }}
-            />
-          </div>
-        ))}
-        {csvPreview.length === 0 ? null : (
-          <div className="confirmation-summary">
-            <strong>CSV Preview: {csvPreview.length} rows</strong>
-            <span>
-              {csvPreview.filter((row) => row.productId === "").length} rows need product matching
-              before save.
-            </span>
-          </div>
-        )}
-      </div>
-      <footer>
-        <button onClick={onAdd}>Add Row</button>
-        <button className="primary" onClick={onSubmit}>
-          Confirm Opening Stock
-        </button>
-      </footer>
-    </section>
-  </div>
+  <OpeningStockDialogContent
+    rows={rows}
+    csvPreview={csvPreview}
+    products={products}
+    onChange={onChange}
+    onAdd={onAdd}
+    onClose={onClose}
+    onSubmit={onSubmit}
+  />
 );
+
+const OpeningStockDialogContent = ({
+  rows,
+  csvPreview,
+  products,
+  onChange,
+  onAdd,
+  onClose,
+  onSubmit
+}: {
+  readonly rows: readonly OpeningStockForm[];
+  readonly csvPreview: readonly OpeningStockForm[];
+  readonly products: readonly ProductListItemDto[];
+  readonly onChange: (index: number, row: OpeningStockForm) => void;
+  readonly onAdd: () => void;
+  readonly onClose: () => void;
+  readonly onSubmit: () => void;
+}) => {
+  const [submitted, setSubmitted] = useState(false);
+  const entries = [...rows, ...csvPreview].filter((entry) => entry.productId !== "");
+  const errors = submitted ? openingStockErrors(entries) : {};
+
+  return (
+    <div className="modal-backdrop">
+      <section className="modal">
+        <header>
+          <h2>Opening Stock Wizard</h2>
+          <button onClick={onClose}>Close</button>
+        </header>
+        <div className="opening-stock-body">
+          <p className="muted-text">
+            Step 1: enter or import products. Step 2: review. Step 3: confirm immutable
+            transactions.
+          </p>
+          {errors.rows === undefined ? null : <small className="field-error">{errors.rows}</small>}
+          {rows.map((row, index) => (
+            <div className="opening-row" key={index}>
+              <ProductSelect
+                value={row.productId}
+                products={products}
+                onChange={(productId) => {
+                  onChange(index, { ...row, productId });
+                }}
+              />
+              <input
+                value={row.quantity}
+                type="number"
+                min="0"
+                onChange={(event) => {
+                  onChange(index, { ...row, quantity: event.target.value });
+                }}
+              />
+              <input
+                value={row.unitCost}
+                type="number"
+                min="0"
+                step="0.01"
+                onChange={(event) => {
+                  onChange(index, { ...row, unitCost: event.target.value });
+                }}
+              />
+              <input
+                value={row.occurredAt}
+                type="datetime-local"
+                onChange={(event) => {
+                  onChange(index, { ...row, occurredAt: event.target.value });
+                }}
+              />
+              <input
+                value={row.notes}
+                placeholder="Notes"
+                onChange={(event) => {
+                  onChange(index, { ...row, notes: event.target.value });
+                }}
+              />
+              {submitted && openingStockRowError(row) !== null ? (
+                <small className="field-error opening-row-error">{openingStockRowError(row)}</small>
+              ) : null}
+            </div>
+          ))}
+          {csvPreview.length === 0 ? null : (
+            <div className="confirmation-summary">
+              <strong>CSV Preview: {csvPreview.length} rows</strong>
+              <span>
+                {csvPreview.filter((row) => row.productId === "").length} rows need product matching
+                before save.
+              </span>
+            </div>
+          )}
+        </div>
+        <footer>
+          <button onClick={onAdd}>Add Row</button>
+          <button
+            className="primary"
+            onClick={() => {
+              setSubmitted(true);
+              onSubmit();
+            }}
+          >
+            Confirm Opening Stock
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+};
 
 const StockAdjustmentDialog = ({
   form,
@@ -6097,101 +6421,156 @@ const StockAdjustmentDialog = ({
   readonly onClose: () => void;
   readonly onSubmit: () => void;
 }) => (
-  <div className="modal-backdrop">
-    <section className="modal small">
-      <header>
-        <h2>Stock Adjustment</h2>
-        <button onClick={onClose}>Close</button>
-      </header>
-      <div className="form-grid">
-        <label className="wide">
-          Product
-          <ProductSelect
-            value={form.productId}
-            products={products}
-            onChange={(productId) => {
-              onChange({ ...form, productId });
-            }}
-          />
-        </label>
-        <label>
-          Direction
-          <select
-            value={form.direction}
-            onChange={(event) => {
-              onChange({
-                ...form,
-                direction: event.target.value as StockAdjustmentForm["direction"]
-              });
-            }}
-          >
-            <option value="increase">Increase</option>
-            <option value="decrease">Decrease</option>
-          </select>
-        </label>
-        <label>
-          Reason
-          <select
-            value={form.reason}
-            onChange={(event) => {
-              onChange({ ...form, reason: event.target.value as StockAdjustmentForm["reason"] });
-            }}
-          >
-            <option value="opening-stock">Opening Stock</option>
-            <option value="damaged">Damaged</option>
-            <option value="expired">Expired</option>
-            <option value="lost">Lost</option>
-            <option value="found">Found</option>
-            <option value="manual-correction">Manual Correction</option>
-            <option value="stock-count-difference">Stock Count Difference</option>
-            <option value="supplier-replacement">Supplier Replacement</option>
-          </select>
-        </label>
-        <Field
-          label="Quantity"
-          type="number"
-          value={form.quantity}
-          onChange={(quantity) => {
-            onChange({ ...form, quantity });
-          }}
-        />
-        <Field
-          label="Cost Price"
-          type="number"
-          value={form.unitCost}
-          onChange={(unitCost) => {
-            onChange({ ...form, unitCost });
-          }}
-        />
-        <label className="wide">
-          Date
-          <input
-            type="datetime-local"
-            value={form.occurredAt}
-            onChange={(event) => {
-              onChange({ ...form, occurredAt: event.target.value });
-            }}
-          />
-        </label>
-        <label className="wide">
-          Notes
-          <textarea
-            value={form.notes}
-            onChange={(event) => {
-              onChange({ ...form, notes: event.target.value });
-            }}
-          />
-        </label>
-      </div>
-      <footer>
-        <button onClick={onClose}>Cancel</button>
-        <button className="primary" onClick={onSubmit}>
-          Record Adjustment
-        </button>
-      </footer>
-    </section>
-  </div>
+  <StockAdjustmentDialogContent
+    form={form}
+    products={products}
+    onChange={onChange}
+    onClose={onClose}
+    onSubmit={onSubmit}
+  />
 );
+
+const StockAdjustmentDialogContent = ({
+  form,
+  products,
+  onChange,
+  onClose,
+  onSubmit
+}: {
+  readonly form: StockAdjustmentForm;
+  readonly products: readonly ProductListItemDto[];
+  readonly onChange: (form: StockAdjustmentForm) => void;
+  readonly onClose: () => void;
+  readonly onSubmit: () => void;
+}) => {
+  const [submitted, setSubmitted] = useState(false);
+  const errors = submitted ? stockAdjustmentErrors(form) : {};
+
+  return (
+    <div className="modal-backdrop">
+      <section className="modal small">
+        <header>
+          <h2>Stock Adjustment</h2>
+          <button onClick={onClose}>Close</button>
+        </header>
+        <div className="form-grid">
+          <label
+            className={
+              errors.productId === undefined ? "field-control wide" : "field-control has-error wide"
+            }
+          >
+            Product
+            <ProductSelect
+              value={form.productId}
+              products={products}
+              onChange={(productId) => {
+                onChange({ ...form, productId });
+              }}
+            />
+            {errors.productId === undefined ? null : (
+              <small className="field-error">{errors.productId}</small>
+            )}
+          </label>
+          <label>
+            Direction
+            <select
+              value={form.direction}
+              onChange={(event) => {
+                onChange({
+                  ...form,
+                  direction: event.target.value as StockAdjustmentForm["direction"]
+                });
+              }}
+            >
+              <option value="increase">Increase</option>
+              <option value="decrease">Decrease</option>
+            </select>
+          </label>
+          <label>
+            Reason
+            <select
+              value={form.reason}
+              onChange={(event) => {
+                onChange({ ...form, reason: event.target.value as StockAdjustmentForm["reason"] });
+              }}
+            >
+              <option value="opening-stock">Opening Stock</option>
+              <option value="damaged">Damaged</option>
+              <option value="expired">Expired</option>
+              <option value="lost">Lost</option>
+              <option value="found">Found</option>
+              <option value="manual-correction">Manual Correction</option>
+              <option value="stock-count-difference">Stock Count Difference</option>
+              <option value="supplier-replacement">Supplier Replacement</option>
+            </select>
+          </label>
+          <Field
+            label="Quantity *"
+            type="number"
+            value={form.quantity}
+            error={errors.quantity}
+            min={0}
+            required
+            onChange={(quantity) => {
+              onChange({ ...form, quantity });
+            }}
+          />
+          <Field
+            label="Cost Price"
+            type="number"
+            value={form.unitCost}
+            error={errors.unitCost}
+            min={0}
+            onChange={(unitCost) => {
+              onChange({ ...form, unitCost });
+            }}
+          />
+          <label
+            className={
+              errors.occurredAt === undefined
+                ? "field-control wide"
+                : "field-control has-error wide"
+            }
+          >
+            Date
+            <input
+              type="datetime-local"
+              value={form.occurredAt}
+              aria-invalid={errors.occurredAt === undefined ? undefined : true}
+              onChange={(event) => {
+                onChange({ ...form, occurredAt: event.target.value });
+              }}
+            />
+            {errors.occurredAt === undefined ? null : (
+              <small className="field-error">{errors.occurredAt}</small>
+            )}
+          </label>
+          <label className="wide">
+            Notes
+            <textarea
+              value={form.notes}
+              onChange={(event) => {
+                onChange({ ...form, notes: event.target.value });
+              }}
+            />
+          </label>
+        </div>
+        <footer>
+          <button onClick={onClose}>Cancel</button>
+          <button
+            className="primary"
+            onClick={() => {
+              setSubmitted(true);
+              onSubmit();
+            }}
+          >
+            Record Adjustment
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+};
 
 const ProductSelect = ({
   value,
@@ -6559,6 +6938,8 @@ const SettingsPage = ({
       backupLocation: ""
     }
   );
+  const [submitted, setSubmitted] = useState(false);
+  const errors = submitted ? settingsErrors(draft) : {};
 
   useEffect(() => {
     if (settings !== null) {
@@ -6567,6 +6948,12 @@ const SettingsPage = ({
   }, [settings]);
 
   const saveSettings = async () => {
+    setSubmitted(true);
+    const validationError = validateSettingsDraft(draft);
+    if (validationError !== null) {
+      showToast(validationError, "error");
+      return;
+    }
     const response = await window.orix.settings.save(draft);
     if (response.ok) {
       onSaved(response.value);
@@ -6615,49 +7002,49 @@ const SettingsPage = ({
           </label>
         </SettingsPanel>
         <SettingsPanel title="Store Information">
-          <label>
-            Store display name
-            <input
-              value={draft.storeDisplayName}
-              onChange={(event) => {
-                setDraft({ ...draft, storeDisplayName: event.target.value });
-              }}
-            />
-          </label>
+          <Field
+            label="Store display name *"
+            value={draft.storeDisplayName}
+            error={errors.storeDisplayName}
+            required
+            onChange={(storeDisplayName) => {
+              setDraft({ ...draft, storeDisplayName });
+            }}
+          />
         </SettingsPanel>
         <SettingsPanel title="Receipt">
-          <label>
-            Header
-            <input
-              value={draft.receiptHeader}
-              onChange={(event) => {
-                setDraft({ ...draft, receiptHeader: event.target.value });
-              }}
-            />
-          </label>
-          <label>
-            Footer
-            <input
-              value={draft.receiptFooter}
-              onChange={(event) => {
-                setDraft({ ...draft, receiptFooter: event.target.value });
-              }}
-            />
-          </label>
+          <Field
+            label="Header *"
+            value={draft.receiptHeader}
+            error={errors.receiptHeader}
+            required
+            onChange={(receiptHeader) => {
+              setDraft({ ...draft, receiptHeader });
+            }}
+          />
+          <Field
+            label="Footer *"
+            value={draft.receiptFooter}
+            error={errors.receiptFooter}
+            required
+            onChange={(receiptFooter) => {
+              setDraft({ ...draft, receiptFooter });
+            }}
+          />
         </SettingsPanel>
         <SettingsPanel title="Database">
-          <OspoMigrationTool canManage={canManageMigration} showToast={showToast} />
+          <LegacyStockImportTool canManage={canManageMigration} showToast={showToast} />
         </SettingsPanel>
         <SettingsPanel title="Backup">
-          <label>
-            Backup location
-            <input
-              value={draft.backupLocation}
-              onChange={(event) => {
-                setDraft({ ...draft, backupLocation: event.target.value });
-              }}
-            />
-          </label>
+          <BackupTool
+            canManage={canManageMigration}
+            settings={draft}
+            onSettingsSaved={(savedSettings) => {
+              setDraft(savedSettings);
+              onSaved(savedSettings);
+            }}
+            showToast={showToast}
+          />
         </SettingsPanel>
         <SettingsPanel title="Users">
           <UserManagement canManage={canManageUsers} showToast={showToast} />
@@ -6667,7 +7054,223 @@ const SettingsPage = ({
   );
 };
 
-const OspoMigrationTool = ({
+const BackupTool = ({
+  canManage,
+  settings,
+  onSettingsSaved,
+  showToast
+}: {
+  readonly canManage: boolean;
+  readonly settings: AppSettingsDto;
+  readonly onSettingsSaved: (settings: AppSettingsDto) => void;
+  readonly showToast: (message: string, tone?: ToastState["tone"]) => void;
+}) => {
+  const [status, setStatus] = useState<BackupStatusDto | null>(null);
+  const [selectedRestoreFile, setSelectedRestoreFile] = useState("");
+  const [restoreConfirmation, setRestoreConfirmation] = useState("");
+  const [busy, setBusy] = useState<
+    "load" | "folder" | "backup" | "file" | "verify" | "restore" | null
+  >("load");
+
+  const loadStatus = useCallback(async () => {
+    setBusy((current) => current ?? "load");
+    const response = await window.orix.backups.status();
+    if (response.ok) {
+      setStatus(response.value);
+    } else {
+      showToast(response.error.message, "error");
+    }
+    setBusy((current) => (current === "load" ? null : current));
+  }, [showToast]);
+
+  useEffect(() => {
+    void loadStatus();
+  }, [loadStatus]);
+
+  const backupLocationLabel =
+    status?.backupLocation ??
+    (settings.backupLocation.trim() === "" ? "Default backup folder" : settings.backupLocation);
+
+  const chooseFolder = async () => {
+    setBusy("folder");
+    const response = await window.orix.backups.selectDirectory();
+    if (response.ok && response.value.directoryPath !== null) {
+      const saved = await window.orix.settings.get();
+      if (saved.ok) {
+        onSettingsSaved(saved.value);
+      }
+      showToast("Backup folder updated.");
+      await loadStatus();
+    } else if (!response.ok) {
+      showToast(response.error.message, "error");
+    }
+    setBusy(null);
+  };
+
+  const createBackup = async () => {
+    setBusy("backup");
+    const response = await window.orix.backups.create();
+    if (response.ok) {
+      showToast("Backup created and verified.");
+      await loadStatus();
+    } else {
+      showToast(response.error.message, "error");
+    }
+    setBusy(null);
+  };
+
+  const chooseRestoreFile = async () => {
+    setBusy("file");
+    const response = await window.orix.backups.selectFile();
+    if (response.ok && response.value.filePath !== null) {
+      setSelectedRestoreFile(response.value.filePath);
+      setRestoreConfirmation("");
+      showToast("Backup file selected. Verify it before restoring.");
+    } else if (!response.ok) {
+      showToast(response.error.message, "error");
+    }
+    setBusy(null);
+  };
+
+  const verifyRestoreFile = async () => {
+    if (selectedRestoreFile.trim() === "") {
+      showToast("Choose a backup file first.", "error");
+      return;
+    }
+    setBusy("verify");
+    const response = await window.orix.backups.verify(selectedRestoreFile.trim());
+    if (response.ok) {
+      showToast(response.value.message, response.value.valid ? "success" : "error");
+    } else {
+      showToast(response.error.message, "error");
+    }
+    setBusy(null);
+  };
+
+  const restoreBackup = async () => {
+    if (selectedRestoreFile.trim() === "") {
+      showToast("Choose a backup file first.", "error");
+      return;
+    }
+    if (restoreConfirmation !== "RESTORE") {
+      showToast("Type RESTORE to confirm database replacement.", "error");
+      return;
+    }
+    setBusy("restore");
+    const response = await window.orix.backups.restore({
+      filePath: selectedRestoreFile.trim(),
+      confirmation: "RESTORE"
+    });
+    if (response.ok) {
+      showToast("Restore complete. Orix will restart now.");
+    } else {
+      showToast(response.error.message, "error");
+      setBusy(null);
+    }
+  };
+
+  if (!canManage) {
+    return <EmptyState title="Backups locked" description="Only owners can manage backups." />;
+  }
+
+  return (
+    <div className="backup-tool">
+      <div className="backup-summary">
+        <div>
+          <strong>Backup & restore</strong>
+          <span>{backupLocationLabel}</span>
+        </div>
+        <BackupStatusBadge backup={status?.lastBackup ?? null} />
+      </div>
+      <div className="backup-actions">
+        <button onClick={() => void chooseFolder()} disabled={busy !== null}>
+          <Icon name="folder" />
+          Choose folder
+        </button>
+        <button className="primary" onClick={() => void createBackup()} disabled={busy !== null}>
+          <Icon name="upload" />
+          Backup now
+        </button>
+      </div>
+      <div className="backup-recent">
+        {(status?.recentBackups ?? []).length === 0 ? (
+          <EmptyState
+            title="No backups yet"
+            description="Create a backup before imports, upgrades, or major store changes."
+          />
+        ) : (
+          status?.recentBackups
+            .slice(0, 3)
+            .map((backup) => <BackupRow key={backup.id} backup={backup} />)
+        )}
+      </div>
+      <div className="backup-restore">
+        <strong>Restore from backup</strong>
+        <span>Restoring replaces the current database and restarts Orix Retail OS.</span>
+        <button onClick={() => void chooseRestoreFile()} disabled={busy !== null}>
+          <Icon name="folder" />
+          Choose backup file
+        </button>
+        {selectedRestoreFile !== "" ? <small>{selectedRestoreFile}</small> : null}
+        <div className="backup-actions">
+          <button onClick={() => void verifyRestoreFile()} disabled={busy !== null}>
+            <Icon name="search" />
+            Verify
+          </button>
+          <input
+            value={restoreConfirmation}
+            placeholder="Type RESTORE"
+            onChange={(event) => {
+              setRestoreConfirmation(event.target.value);
+            }}
+          />
+          <button
+            className="danger"
+            onClick={() => void restoreBackup()}
+            disabled={busy !== null || restoreConfirmation !== "RESTORE"}
+          >
+            Restore
+          </button>
+        </div>
+      </div>
+      {busy !== null ? <p className="muted-text">Backup tool is working...</p> : null}
+    </div>
+  );
+};
+
+const BackupStatusBadge = ({ backup }: { readonly backup: BackupRecordDto | null }) => {
+  if (backup === null) {
+    return <span className="backup-badge warning">No backup</span>;
+  }
+  return (
+    <span className={`backup-badge ${backup.status === "completed" ? "success" : "warning"}`}>
+      {backup.status === "completed" ? "Protected" : "Needs attention"}
+    </span>
+  );
+};
+
+const BackupRow = ({ backup }: { readonly backup: BackupRecordDto }) => (
+  <div className="backup-row">
+    <span>
+      <strong>{backup.backupNumber}</strong>
+      <small>{backup.fileName}</small>
+    </span>
+    <span>
+      {backup.completedAt === null
+        ? "Not completed"
+        : new Date(backup.completedAt).toLocaleString()}
+    </span>
+    <span>{backup.fileSizeBytes === null ? "-" : formatFileSize(backup.fileSizeBytes)}</span>
+  </div>
+);
+
+const formatFileSize = (size: number): string => {
+  if (size < 1024) return `${String(size)} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+};
+
+const LegacyStockImportTool = ({
   canManage,
   showToast
 }: {
@@ -6676,49 +7279,78 @@ const OspoMigrationTool = ({
 }) => {
   const [itemsFile, setItemsFile] = useState("");
   const [sqlFile, setSqlFile] = useState("");
-  const [preview, setPreview] = useState<OspoMigrationPreviewDto | null>(null);
-  const [result, setResult] = useState<OspoMigrationImportResultDto | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<readonly string[]>([]);
+  const [preview, setPreview] = useState<LegacyStockImportPreviewDto | null>(null);
+  const [result, setResult] = useState<LegacyStockImportResultDto | null>(null);
   const [busy, setBusy] = useState<"select" | "preview" | "import" | null>(null);
 
   const chooseFiles = async () => {
     setBusy("select");
-    const response = await window.orix.migration.selectOspoFiles();
+    setResult(null);
+    const response = await window.orix.migration.selectLegacyStockFiles();
     setBusy(null);
     if (!response.ok) {
       showToast(response.error.message, "error");
       return;
     }
+    setSelectedFiles(response.value.selectedFiles);
     if (response.value.itemsFile !== null) setItemsFile(response.value.itemsFile);
     if (response.value.sqlFile !== null) setSqlFile(response.value.sqlFile);
+    setPreview(null);
+    if (response.value.itemsFile === null) {
+      showToast("No product list file was detected. Select the export files again.", "error");
+      return;
+    }
+    if (response.value.sqlFile === null) {
+      showToast("Product file found. Stock data file is still needed for quantities.", "error");
+      return;
+    }
+    showToast("Files detected. Preview the import before continuing.");
   };
 
   const runPreview = async () => {
     if (itemsFile.trim() === "") {
-      showToast("Select ospos_items.csv first.", "error");
+      showToast("Select the previous software items file first.", "error");
       return;
     }
     setBusy("preview");
     setResult(null);
-    const response = await window.orix.migration.previewOspo({
+    const response = await window.orix.migration.previewLegacyStock({
       itemsFile: itemsFile.trim(),
       ...(sqlFile.trim() === "" ? {} : { sqlFile: sqlFile.trim() })
     });
     setBusy(null);
     if (response.ok) {
       setPreview(response.value);
-      showToast("Migration preview ready.");
+      showToast(
+        sqlFile.trim() === ""
+          ? "Product preview ready. Select the old stock or backup file before importing."
+          : "Migration preview ready."
+      );
     } else {
       showToast(response.error.message, "error");
     }
   };
 
   const runImport = async () => {
-    if (itemsFile.trim() === "" || sqlFile.trim() === "") {
-      showToast("Select both the items CSV and SQL dump before importing.", "error");
+    if (itemsFile.trim() === "") {
+      showToast("Select the old software product list before importing.", "error");
+      return;
+    }
+    if (sqlFile.trim() === "") {
+      showToast(
+        "Select the old software stock or backup file so quantities can be imported.",
+        "error"
+      );
+      return;
+    }
+    const backupStatus = await window.orix.backups.status();
+    if (!backupStatus.ok || backupStatus.value.lastBackup?.status !== "completed") {
+      showToast("Create a verified backup before importing stock.", "error");
       return;
     }
     setBusy("import");
-    const response = await window.orix.migration.importOspo({
+    const response = await window.orix.migration.importLegacyStock({
       itemsFile: itemsFile.trim(),
       sqlFile: sqlFile.trim(),
       mode: "valid-only"
@@ -6744,12 +7376,44 @@ const OspoMigrationTool = ({
 
   return (
     <div className="migration-tool">
+      <div className="migration-intro">
+        <strong>Import from previous software</strong>
+        <span>
+          Select all export or backup files from the old software at once. Orix will detect the
+          product list and stock quantities automatically.
+        </span>
+      </div>
+      <div className="migration-steps">
+        <div className={`migration-step ${selectedFiles.length > 0 ? "complete" : ""}`}>
+          <span>1</span>
+          <strong>Choose old software files</strong>
+          <small>
+            {selectedFiles.length === 0
+              ? "No files selected"
+              : `${String(selectedFiles.length)} files selected`}
+          </small>
+        </div>
+        <div className={`migration-step ${preview !== null ? "complete" : ""}`}>
+          <span>2</span>
+          <strong>Preview detected data</strong>
+          <small>Review products, stock, and problems before import</small>
+        </div>
+        <div className={`migration-step ${result !== null ? "complete" : ""}`}>
+          <span>3</span>
+          <strong>Import ready items</strong>
+          <small>Clean rows become products and opening stock</small>
+        </div>
+      </div>
       <div className="migration-actions">
         <button onClick={() => void chooseFiles()} disabled={busy !== null}>
           <Icon name="folder" />
-          Choose files
+          Select old software files
         </button>
-        <button onClick={() => void runPreview()} disabled={busy !== null || itemsFile === ""}>
+        <button
+          onClick={() => void runPreview()}
+          disabled={busy !== null || itemsFile === ""}
+          title={itemsFile === "" ? "Select files first" : "Preview import"}
+        >
           <Icon name="search" />
           Preview
         </button>
@@ -6757,41 +7421,48 @@ const OspoMigrationTool = ({
           className="primary"
           onClick={() => void runImport()}
           disabled={busy !== null || preview === null || sqlFile === ""}
+          title={
+            sqlFile === "" ? "Stock data file is required before import" : "Import ready items"
+          }
         >
           <Icon name="upload" />
-          Import valid rows
+          Import ready items
         </button>
       </div>
-      <label>
-        Items CSV
-        <input
-          value={itemsFile}
-          onChange={(event) => {
-            setItemsFile(event.target.value);
-          }}
-          placeholder="/path/to/ospos_items.csv"
-        />
-      </label>
-      <label>
-        SQL dump
-        <input
-          value={sqlFile}
-          onChange={(event) => {
-            setSqlFile(event.target.value);
-          }}
-          placeholder="/path/to/ospos.sql"
-        />
-      </label>
-      {busy !== null ? <p className="muted-text">Working on migration...</p> : null}
+      <div className="migration-detection">
+        <div className={itemsFile === "" ? "missing" : "found"}>
+          <strong>Product list</strong>
+          <span>{itemsFile === "" ? "Not detected yet" : "Detected"}</span>
+        </div>
+        <div className={sqlFile === "" ? "missing" : "found"}>
+          <strong>Stock quantities</strong>
+          <span>{sqlFile === "" ? "Not detected yet" : "Detected"}</span>
+        </div>
+      </div>
+      {itemsFile !== "" && sqlFile === "" ? (
+        <p className="field-error">
+          Products can be previewed, but stock quantities cannot be imported until the old stock or
+          backup file is selected.
+        </p>
+      ) : null}
+      {selectedFiles.length > 0 ? (
+        <details className="migration-files">
+          <summary>Selected files</summary>
+          {selectedFiles.map((filePath) => (
+            <span key={filePath}>{filePath}</span>
+          ))}
+        </details>
+      ) : null}
+      {busy !== null ? <p className="muted-text">Working on import...</p> : null}
       {preview === null ? (
         <EmptyState
-          title="OSPOS import"
-          description="Preview your friend's current items and inventory before importing."
+          title="Previous software import"
+          description="Start by selecting all export files from the old system. Orix will tell you what it can import."
         />
       ) : (
         <div className="migration-preview">
           <div className="migration-store">
-            <strong>{preview.store.company ?? "OSPOS store"}</strong>
+            <strong>{preview.store.company ?? "Previous software store"}</strong>
             <span>{preview.store.address ?? "No address found"}</span>
             <span>{preview.store.phone ?? "No phone found"}</span>
           </div>
@@ -6805,8 +7476,8 @@ const OspoMigrationTool = ({
             <Metric label="Duplicate Barcodes" value={String(preview.totals.duplicateBarcodes)} />
           </div>
           <p className="muted-text">
-            {blockingCount} blocking issues and {warningCount} warnings found. Valid-row import
-            skips blocked products and keeps a review list.
+            {blockingCount} blocking issues and {warningCount} warnings found. Import keeps the old
+            system's current stock where data is clean and skips blocked products for review.
           </p>
           <div className="migration-sample">
             {preview.sampleProducts.slice(0, 6).map((product) => (
@@ -6857,7 +7528,9 @@ const UserManagement = ({
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<"all" | "active" | "disabled">("all");
   const [form, setForm] = useState<UserFormState | null>(null);
+  const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(true);
+  const userErrors = form === null || !submitted ? {} : userFormErrors(form);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -6876,6 +7549,11 @@ const UserManagement = ({
 
   const saveUser = async () => {
     if (form === null) return;
+    const validationError = validateUserForm(form);
+    if (validationError !== null) {
+      showToast(validationError, "error");
+      return;
+    }
     const payload: UserSavePayload = {
       fullName: form.fullName,
       username: form.username,
@@ -6919,6 +7597,7 @@ const UserManagement = ({
           className="primary"
           disabled={!canManage}
           onClick={() => {
+            setSubmitted(false);
             setForm({
               fullName: "",
               username: "",
@@ -6949,6 +7628,7 @@ const UserManagement = ({
               <button
                 disabled={!canManage}
                 onClick={() => {
+                  setSubmitted(false);
                   setForm({
                     id: user.id,
                     fullName: user.fullName,
@@ -6973,6 +7653,7 @@ const UserManagement = ({
               <h2>{form.id === undefined ? "Create User" : "Edit User"}</h2>
               <button
                 onClick={() => {
+                  setSubmitted(false);
                   setForm(null);
                 }}
               >
@@ -6981,15 +7662,19 @@ const UserManagement = ({
             </header>
             <div className="form-grid">
               <Field
-                label="Full Name"
+                label="Full Name *"
                 value={form.fullName}
+                error={userErrors.fullName}
+                required
                 onChange={(fullName) => {
                   setForm({ ...form, fullName });
                 }}
               />
               <Field
-                label="Username"
+                label="Username *"
                 value={form.username}
+                error={userErrors.username}
+                required
                 onChange={(username) => {
                   setForm({ ...form, username });
                 }}
@@ -6998,6 +7683,8 @@ const UserManagement = ({
                 label={form.id === undefined ? "Password" : "New Password"}
                 type="password"
                 value={form.password}
+                error={userErrors.password}
+                required={form.id === undefined}
                 onChange={(password) => {
                   setForm({ ...form, password });
                 }}
@@ -7005,7 +7692,10 @@ const UserManagement = ({
               <Field
                 label={form.id === undefined ? "PIN" : "New PIN"}
                 value={form.pin}
+                error={userErrors.pin}
+                required={form.id === undefined}
                 maxLength={4}
+                helperText="Use 4 digits for quick unlock."
                 onChange={(pin) => {
                   setForm({ ...form, pin: pin.replace(/\D/g, "").slice(0, 4) });
                 }}
@@ -7038,17 +7728,27 @@ const UserManagement = ({
                     {role}
                   </label>
                 ))}
+                {userErrors.roleNames === undefined ? null : (
+                  <small className="field-error">{userErrors.roleNames}</small>
+                )}
               </div>
             </div>
             <footer>
               <button
                 onClick={() => {
+                  setSubmitted(false);
                   setForm(null);
                 }}
               >
                 Cancel
               </button>
-              <button className="primary" onClick={() => void saveUser()}>
+              <button
+                className="primary"
+                onClick={() => {
+                  setSubmitted(true);
+                  void saveUser();
+                }}
+              >
                 Save User
               </button>
             </footer>
@@ -7334,137 +8034,162 @@ const ProductDialog = ({
   readonly saving: boolean;
   readonly setForm: (form: ProductFormState | null) => void;
   readonly onSave: () => Promise<void>;
-}) => (
-  <div className="modal-backdrop">
-    <form
-      className="modal"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void onSave();
-      }}
-    >
-      <header>
-        <div>
-          <p className="eyebrow">Quick item setup</p>
-          <h2>{form.id === undefined ? "Add Item" : "Edit Item"}</h2>
+}) => {
+  const [submitted, setSubmitted] = useState(false);
+  const errors = submitted ? productFormErrors(form) : {};
+
+  return (
+    <div className="modal-backdrop">
+      <form
+        className="modal"
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          setSubmitted(true);
+          void onSave();
+        }}
+      >
+        <header>
+          <div>
+            <p className="eyebrow">Quick item setup</p>
+            <h2>{form.id === undefined ? "Add Item" : "Edit Item"}</h2>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setForm(null);
+            }}
+          >
+            ×
+          </button>
+        </header>
+        <div className="form-grid">
+          <Field
+            label="Item name *"
+            value={form.name}
+            error={errors.name}
+            required
+            onChange={(value) => {
+              setForm({ ...form, name: value });
+            }}
+          />
+          <Field
+            label="Barcode / scan code"
+            value={form.barcode}
+            helperText="Scan or type the barcode printed on the product."
+            onChange={(value) => {
+              setForm({ ...form, barcode: value });
+            }}
+          />
+          <SelectField
+            label="Category *"
+            value={form.categoryId}
+            options={categories}
+            error={errors.categoryId}
+            required
+            onChange={(value) => {
+              setForm({ ...form, categoryId: value });
+            }}
+          />
+          <SelectField
+            label="Brand"
+            value={form.brandId}
+            options={brands}
+            onChange={(value) => {
+              setForm({ ...form, brandId: value });
+            }}
+            optional
+          />
+          <SelectField
+            label="Sold as *"
+            value={form.unitId}
+            options={units}
+            error={errors.unitId}
+            required
+            onChange={(value) => {
+              setForm({ ...form, unitId: value });
+            }}
+          />
+          <Field
+            label="Buy price *"
+            value={form.purchasePrice}
+            error={errors.purchasePrice}
+            required
+            min={0}
+            onChange={(value) => {
+              setForm({ ...form, purchasePrice: value });
+            }}
+            type="number"
+          />
+          <Field
+            label="Sale price *"
+            value={form.salePrice}
+            error={errors.salePrice}
+            required
+            min={0}
+            onChange={(value) => {
+              setForm({ ...form, salePrice: value });
+            }}
+            type="number"
+          />
+          <Field
+            label="Stock now"
+            value={form.openingStock}
+            error={errors.openingStock}
+            helperText={form.id === undefined ? "Use this only for first-time stock entry." : ""}
+            min={0}
+            onChange={(value) => {
+              setForm({ ...form, openingStock: value });
+            }}
+            type="number"
+          />
+          <Field
+            label="Low stock alert"
+            value={form.minimumStock}
+            error={errors.minimumStock}
+            min={0}
+            onChange={(value) => {
+              setForm({ ...form, minimumStock: value });
+            }}
+            type="number"
+          />
+          <label className="wide">
+            Description
+            <textarea
+              value={form.description}
+              onChange={(event) => {
+                setForm({ ...form, description: event.target.value });
+              }}
+            />
+          </label>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={form.active}
+              onChange={(event) => {
+                setForm({ ...form, active: event.target.checked });
+              }}
+            />
+            Active
+          </label>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setForm(null);
-          }}
-        >
-          ×
-        </button>
-      </header>
-      <div className="form-grid">
-        <Field
-          label="Item name *"
-          value={form.name}
-          onChange={(value) => {
-            setForm({ ...form, name: value });
-          }}
-        />
-        <Field
-          label="Barcode / scan code"
-          value={form.barcode}
-          onChange={(value) => {
-            setForm({ ...form, barcode: value });
-          }}
-        />
-        <SelectField
-          label="Category *"
-          value={form.categoryId}
-          options={categories}
-          onChange={(value) => {
-            setForm({ ...form, categoryId: value });
-          }}
-        />
-        <SelectField
-          label="Brand"
-          value={form.brandId}
-          options={brands}
-          onChange={(value) => {
-            setForm({ ...form, brandId: value });
-          }}
-          optional
-        />
-        <SelectField
-          label="Sold as *"
-          value={form.unitId}
-          options={units}
-          onChange={(value) => {
-            setForm({ ...form, unitId: value });
-          }}
-        />
-        <Field
-          label="Buy price *"
-          value={form.purchasePrice}
-          onChange={(value) => {
-            setForm({ ...form, purchasePrice: value });
-          }}
-          type="number"
-        />
-        <Field
-          label="Sale price *"
-          value={form.salePrice}
-          onChange={(value) => {
-            setForm({ ...form, salePrice: value });
-          }}
-          type="number"
-        />
-        <Field
-          label="Stock now"
-          value={form.openingStock}
-          onChange={(value) => {
-            setForm({ ...form, openingStock: value });
-          }}
-          type="number"
-        />
-        <Field
-          label="Low stock alert"
-          value={form.minimumStock}
-          onChange={(value) => {
-            setForm({ ...form, minimumStock: value });
-          }}
-          type="number"
-        />
-        <label className="wide">
-          Description
-          <textarea
-            value={form.description}
-            onChange={(event) => {
-              setForm({ ...form, description: event.target.value });
+        <footer>
+          <button
+            type="button"
+            onClick={() => {
+              setForm(null);
             }}
-          />
-        </label>
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={form.active}
-            onChange={(event) => {
-              setForm({ ...form, active: event.target.checked });
-            }}
-          />
-          Active
-        </label>
-      </div>
-      <footer>
-        <button
-          type="button"
-          onClick={() => {
-            setForm(null);
-          }}
-        >
-          Cancel
-        </button>
-        <button className="primary" disabled={saving} type="submit">
-          {saving ? "Saving..." : "Save Item"}
-        </button>
-      </footer>
-    </form>
-  </div>
-);
+          >
+            Cancel
+          </button>
+          <button className="primary" disabled={saving} type="submit">
+            {saving ? "Saving..." : "Save Item"}
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
+};
 
 const CatalogDialog = ({
   form,
@@ -7474,69 +8199,82 @@ const CatalogDialog = ({
   readonly form: CatalogFormState;
   readonly setForm: (form: CatalogFormState | null) => void;
   readonly onSave: () => Promise<void>;
-}) => (
-  <div className="modal-backdrop">
-    <form
-      className="modal compact"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void onSave();
-      }}
-    >
-      <header>
-        <h2>
-          {form.id === undefined ? "Add" : "Edit"} {form.kind}
-        </h2>
-        <button
-          type="button"
-          onClick={() => {
-            setForm(null);
-          }}
-        >
-          ×
-        </button>
-      </header>
-      <div className="form-grid one">
-        <Field
-          label="Name *"
-          value={form.name}
-          onChange={(value) => {
-            setForm({ ...form, name: value });
-          }}
-        />
-        <Field
-          label="Code"
-          value={form.code}
-          onChange={(value) => {
-            setForm({ ...form, code: value });
-          }}
-        />
-        {form.kind === "unit" && (
+}) => {
+  const [submitted, setSubmitted] = useState(false);
+  const errors = submitted ? catalogFormErrors(form) : {};
+
+  return (
+    <div className="modal-backdrop">
+      <form
+        className="modal compact"
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          setSubmitted(true);
+          void onSave();
+        }}
+      >
+        <header>
+          <h2>
+            {form.id === undefined ? "Add" : "Edit"} {form.kind}
+          </h2>
+          <button
+            type="button"
+            onClick={() => {
+              setForm(null);
+            }}
+          >
+            ×
+          </button>
+        </header>
+        <div className="form-grid one">
           <Field
-            label="Abbreviation *"
-            value={form.abbreviation}
+            label="Name *"
+            value={form.name}
+            error={errors.name}
+            required
             onChange={(value) => {
-              setForm({ ...form, abbreviation: value });
+              setForm({ ...form, name: value });
             }}
           />
-        )}
-      </div>
-      <footer>
-        <button
-          type="button"
-          onClick={() => {
-            setForm(null);
-          }}
-        >
-          Cancel
-        </button>
-        <button className="primary" type="submit">
-          Save
-        </button>
-      </footer>
-    </form>
-  </div>
-);
+          <Field
+            label="Code"
+            value={form.code}
+            helperText="Optional short code for reports and import matching."
+            onChange={(value) => {
+              setForm({ ...form, code: value });
+            }}
+          />
+          {form.kind === "unit" && (
+            <Field
+              label="Abbreviation *"
+              value={form.abbreviation}
+              error={errors.abbreviation}
+              required
+              helperText="Example: pcs, kg, box."
+              onChange={(value) => {
+                setForm({ ...form, abbreviation: value });
+              }}
+            />
+          )}
+        </div>
+        <footer>
+          <button
+            type="button"
+            onClick={() => {
+              setForm(null);
+            }}
+          >
+            Cancel
+          </button>
+          <button className="primary" type="submit">
+            Save
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
+};
 
 const ProductDrawer = ({
   product,
@@ -7587,25 +8325,40 @@ const Field = ({
   value,
   onChange,
   type = "text",
-  maxLength
+  maxLength,
+  min,
+  required = false,
+  helperText = "",
+  error
 }: {
   readonly label: string;
   readonly value: string;
   readonly onChange: (value: string) => void;
   readonly type?: "text" | "number" | "email" | "password";
   readonly maxLength?: number;
+  readonly min?: number;
+  readonly required?: boolean;
+  readonly helperText?: string;
+  readonly error?: string | undefined;
 }) => (
-  <label>
-    {label}
+  <label className={error === undefined ? "field-control" : "field-control has-error"}>
+    <span>{label}</span>
     <input
       type={type}
       step={type === "number" ? "0.01" : undefined}
+      min={type === "number" ? min : undefined}
       maxLength={maxLength}
+      required={required}
+      aria-invalid={error === undefined ? undefined : true}
       value={value}
       onChange={(event) => {
         onChange(event.target.value);
       }}
     />
+    {error === undefined ? null : <small className="field-error">{error}</small>}
+    {error === undefined && helperText.trim().length > 0 ? (
+      <small className="field-help">{helperText}</small>
+    ) : null}
   </label>
 );
 
@@ -7614,18 +8367,24 @@ const SelectField = ({
   value,
   options,
   onChange,
-  optional = false
+  optional = false,
+  required = false,
+  error
 }: {
   readonly label: string;
   readonly value: string;
   readonly options: readonly CatalogItemDto[];
   readonly onChange: (value: string) => void;
   readonly optional?: boolean;
+  readonly required?: boolean;
+  readonly error?: string | undefined;
 }) => (
-  <label>
-    {label}
+  <label className={error === undefined ? "field-control" : "field-control has-error"}>
+    <span>{label}</span>
     <select
       value={value}
+      required={required}
+      aria-invalid={error === undefined ? undefined : true}
       onChange={(event) => {
         onChange(event.target.value);
       }}
@@ -7637,6 +8396,7 @@ const SelectField = ({
         </option>
       ))}
     </select>
+    {error === undefined ? null : <small className="field-error">{error}</small>}
   </label>
 );
 

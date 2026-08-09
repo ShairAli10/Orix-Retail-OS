@@ -1,6 +1,7 @@
 import { pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { copyFile, mkdir, stat } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   ApplicationEvent,
@@ -24,6 +25,13 @@ import type {
   AppContextContract,
   AppIpcError,
   AppSettingsDto,
+  BackupCreateContract,
+  BackupRecordDto,
+  BackupRestoreContract,
+  BackupSelectDirectoryContract,
+  BackupSelectFileContract,
+  BackupStatusContract,
+  BackupVerifyContract,
   AuthStatusContract,
   CatalogWritePayload,
   CustomerActivityContract,
@@ -59,10 +67,10 @@ import type {
   PurchaseSaveDraftContract,
   SettingsGetContract,
   SettingsSaveContract,
-  OspoMigrationImportContract,
-  OspoMigrationImportResultDto,
-  OspoMigrationPreviewContract,
-  OspoMigrationSelectFilesContract,
+  LegacyStockImportContract,
+  LegacyStockImportPreviewContract,
+  LegacyStockImportResultDto,
+  LegacyStockImportSelectFilesContract,
   LoginContract,
   LockContract,
   LogoutContract,
@@ -101,6 +109,13 @@ import { createRepositories, type CatalogItem, type RepositoryFactory } from "@o
 import { err as ipcErr, ok as ipcOk, type Result } from "@orix/shared";
 import type * as Electron from "electron";
 import type { BrowserWindow as BrowserWindowType } from "electron";
+import {
+  buildBackupFileName,
+  buildBackupNumber,
+  calculateFileChecksum,
+  verificationFailed,
+  verificationOk
+} from "./backup-utils.js";
 
 type ElectronMainRuntime = Pick<typeof Electron, "app" | "BrowserWindow" | "dialog" | "ipcMain">;
 
@@ -121,6 +136,7 @@ const settingsEffectiveAt = "1970-01-01T00:00:00.000Z";
 
 type AppState = {
   readonly connection: DatabaseConnection;
+  readonly dbPath: string;
   readonly repositories: RepositoryFactory;
   readonly productService: ProductManagementApplicationService;
   readonly inventoryService: InventoryManagementApplicationService;
@@ -146,6 +162,19 @@ type MoneyRow = {
 
 type AppSettingRow = {
   readonly valueJson: string;
+};
+
+type BackupRow = {
+  readonly id: string;
+  readonly backupNumber: string;
+  readonly status: string;
+  readonly fileName: string | null;
+  readonly fileSizeBytes: number | null;
+  readonly checksum: string | null;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
+  readonly verifiedAt: string | null;
+  readonly failureReason: string | null;
 };
 
 type UserRow = {
@@ -437,6 +466,7 @@ const initializeAppState = (): AppState => {
 
   return {
     connection,
+    dbPath,
     repositories,
     productService,
     inventoryService,
@@ -1411,6 +1441,193 @@ const saveAppSettings = (state: AppState, settings: AppSettingsDto): AppSettings
   return settings;
 };
 
+const backupLocationFor = (state: AppState): string => {
+  const configured = readAppSettings(state).backupLocation.trim();
+  return configured.length > 0
+    ? configured
+    : join(app.getPath("documents"), "Orix Retail OS Backups");
+};
+
+const backupRecordFromRow = (row: BackupRow, backupLocation: string): BackupRecordDto => {
+  const status =
+    row.status === "started" || row.status === "completed" || row.status === "failed"
+      ? row.status
+      : "failed";
+  return {
+    id: row.id,
+    backupNumber: row.backupNumber,
+    status,
+    fileName: row.fileName ?? "Unknown backup file",
+    filePath: row.fileName === null ? null : join(backupLocation, row.fileName),
+    fileSizeBytes: row.fileSizeBytes,
+    checksum: row.checksum,
+    startedAt: row.startedAt,
+    completedAt: row.completedAt,
+    verifiedAt: row.verifiedAt,
+    failureReason: row.failureReason
+  };
+};
+
+const recentBackupRows = (state: AppState): readonly BackupRecordDto[] => {
+  const backupLocation = backupLocationFor(state);
+  const rows = state.connection.sqlite
+    .prepare(
+      `SELECT id,
+              backup_number AS backupNumber,
+              status,
+              file_name AS fileName,
+              file_size_bytes AS fileSizeBytes,
+              checksum,
+              started_at AS startedAt,
+              completed_at AS completedAt,
+              verified_at AS verifiedAt,
+              failure_reason AS failureReason
+         FROM backups
+        WHERE store_id = ?
+        ORDER BY COALESCE(completed_at, started_at, created_at) DESC
+        LIMIT 8`
+    )
+    .all(state.storeId) as BackupRow[];
+  return rows.map((row) => backupRecordFromRow(row, backupLocation));
+};
+
+const publishBackupEvent = async (
+  state: AppState,
+  eventName:
+    | "BackupStarted"
+    | "BackupCompleted"
+    | "BackupFailed"
+    | "RestoreStarted"
+    | "RestoreCompleted"
+    | "RestoreFailed",
+  sourceId: string,
+  payload: Readonly<Record<string, unknown>>
+): Promise<void> => {
+  await new PersistedEventPublisher(state.connection).publish({
+    id: randomUUID(),
+    kind: "domain",
+    name: eventName,
+    version: 1,
+    occurredAt: new Date().toISOString(),
+    payload: {
+      entityId: sourceId,
+      ...payload
+    },
+    metadata: { storeId: state.storeId, actorId: state.userId }
+  });
+};
+
+const verifyBackupFile = (filePath: string): BackupVerifyContract["response"] => {
+  try {
+    if (!existsSync(filePath)) {
+      return appOk(verificationFailed("Backup file was not found."));
+    }
+    const readonlyConnection = createDatabaseConnection({
+      filePath,
+      mode: "readonly",
+      enableWal: false
+    });
+    try {
+      const integrity = readonlyConnection.sqlite.prepare("PRAGMA integrity_check").get() as
+        { readonly integrity_check?: string } | undefined;
+      if (integrity?.integrity_check !== "ok") {
+        return appOk(verificationFailed("SQLite integrity check failed."));
+      }
+      const storeCount = countAmount(readonlyConnection, "SELECT COUNT(*) AS count FROM stores");
+      if (storeCount < 1) {
+        return appOk(verificationFailed("Backup does not contain store data."));
+      }
+      return appOk(verificationOk("Backup is valid and restorable."));
+    } finally {
+      readonlyConnection.close();
+    }
+  } catch {
+    return appOk(verificationFailed("Backup could not be opened as an Orix database."));
+  }
+};
+
+const createVerifiedBackup = async (state: AppState): Promise<BackupRecordDto> => {
+  const startedAt = new Date();
+  const backupNumber = buildBackupNumber(startedAt);
+  const backupLocation = backupLocationFor(state);
+  await mkdir(backupLocation, { recursive: true });
+  const fileName = buildBackupFileName(startedAt);
+  const filePath = join(backupLocation, fileName);
+  const backupId = randomUUID();
+  const timestamp = startedAt.toISOString();
+
+  state.connection.sqlite
+    .prepare(
+      `INSERT INTO backups (
+        id, store_id, backup_number, status, destination_type, file_name, app_version,
+        started_at, created_at, created_by_user_id
+      ) VALUES (?, ?, ?, 'started', 'local-file', ?, ?, ?, ?, ?)`
+    )
+    .run(
+      backupId,
+      state.storeId,
+      backupNumber,
+      fileName,
+      app.getVersion(),
+      timestamp,
+      timestamp,
+      state.userId
+    );
+  await publishBackupEvent(state, "BackupStarted", backupId, { backupNumber, fileName });
+
+  try {
+    state.connection.sqlite.pragma("wal_checkpoint(FULL)");
+    await state.connection.sqlite.backup(filePath);
+    const fileStats = await stat(filePath);
+    const checksum = await calculateFileChecksum(filePath);
+    const verification = verifyBackupFile(filePath);
+    const verifiedAt =
+      verification.ok && verification.value.valid ? verification.value.checkedAt : null;
+    const completedAt = new Date().toISOString();
+    state.connection.sqlite
+      .prepare(
+        `UPDATE backups
+            SET status = 'completed',
+                file_size_bytes = ?,
+                checksum = ?,
+                completed_at = ?,
+                verified_at = ?
+          WHERE id = ?`
+      )
+      .run(fileStats.size, checksum, completedAt, verifiedAt, backupId);
+    await publishBackupEvent(state, "BackupCompleted", backupId, {
+      backupNumber,
+      fileName,
+      fileSizeBytes: fileStats.size,
+      checksum
+    });
+    return {
+      id: backupId,
+      backupNumber,
+      status: "completed",
+      fileName,
+      filePath,
+      fileSizeBytes: fileStats.size,
+      checksum,
+      startedAt: timestamp,
+      completedAt,
+      verifiedAt,
+      failureReason: null
+    };
+  } catch (cause) {
+    const failureReason = cause instanceof Error ? cause.message : "Backup failed.";
+    state.connection.sqlite
+      .prepare("UPDATE backups SET status = 'failed', failure_reason = ? WHERE id = ?")
+      .run(failureReason, backupId);
+    await publishBackupEvent(state, "BackupFailed", backupId, {
+      backupNumber,
+      fileName,
+      failureReason
+    });
+    throw cause;
+  }
+};
+
 const registerAppHandlers = (state: AppState): void => {
   ipcMain.handle("orix:app.context", (): AppContextContract["response"] => {
     try {
@@ -1644,6 +1861,138 @@ const registerAppHandlers = (state: AppState): void => {
       }
     }
   );
+
+  ipcMain.handle("orix:backups.status", (): BackupStatusContract["response"] => {
+    try {
+      const recentBackups = recentBackupRows(state);
+      return appOk({
+        backupLocation: backupLocationFor(state),
+        lastBackup: recentBackups[0] ?? null,
+        recentBackups
+      });
+    } catch {
+      return appFail("Unable to load backup status.");
+    }
+  });
+
+  ipcMain.handle(
+    "orix:backups.select-directory",
+    async (): Promise<BackupSelectDirectoryContract["response"]> => {
+      if (!can(state, "settings.manage")) {
+        return appFail("You do not have permission to manage backups.");
+      }
+      const result = await dialog.showOpenDialog({
+        title: "Choose backup folder",
+        properties: ["openDirectory", "createDirectory"]
+      });
+      if (result.canceled || result.filePaths[0] === undefined) {
+        return appOk({ directoryPath: null });
+      }
+      const settings = readAppSettings(state);
+      saveAppSettings(state, { ...settings, backupLocation: result.filePaths[0] });
+      return appOk({ directoryPath: result.filePaths[0] });
+    }
+  );
+
+  ipcMain.handle("orix:backups.create", async (): Promise<BackupCreateContract["response"]> => {
+    if (!can(state, "settings.manage")) {
+      return appFail("You do not have permission to create backups.");
+    }
+    try {
+      return appOk(await createVerifiedBackup(state));
+    } catch {
+      return appFail(
+        "Backup could not be created. Check the selected backup folder and try again."
+      );
+    }
+  });
+
+  ipcMain.handle(
+    "orix:backups.select-file",
+    async (): Promise<BackupSelectFileContract["response"]> => {
+      if (!can(state, "settings.manage")) {
+        return appFail("You do not have permission to restore backups.");
+      }
+      const result = await dialog.showOpenDialog({
+        title: "Choose Orix backup file",
+        properties: ["openFile"],
+        filters: [
+          { name: "SQLite backups", extensions: ["sqlite", "db"] },
+          { name: "All files", extensions: ["*"] }
+        ]
+      });
+      return appOk({ filePath: result.canceled ? null : (result.filePaths[0] ?? null) });
+    }
+  );
+
+  ipcMain.handle(
+    "orix:backups.verify",
+    (_event, request: BackupVerifyContract["request"]): BackupVerifyContract["response"] => {
+      if (!can(state, "settings.manage")) {
+        return appFail("You do not have permission to verify backups.");
+      }
+      return verifyBackupFile(request.payload.filePath);
+    }
+  );
+
+  ipcMain.handle(
+    "orix:backups.restore",
+    async (
+      _event,
+      request: BackupRestoreContract["request"]
+    ): Promise<BackupRestoreContract["response"]> => {
+      if (!can(state, "settings.manage")) {
+        return appFail("You do not have permission to restore backups.");
+      }
+      if (request.payload.confirmation !== "RESTORE") {
+        return appFail("Restore confirmation is required.");
+      }
+      const verification = verifyBackupFile(request.payload.filePath);
+      if (!verification.ok || !verification.value.valid) {
+        return appFail(
+          verification.ok ? verification.value.message : "Backup could not be verified."
+        );
+      }
+
+      let connectionClosed = false;
+      try {
+        await publishBackupEvent(state, "RestoreStarted", state.storeId, {
+          backupFile: basename(request.payload.filePath)
+        });
+        const restorePointDirectory = join(backupLocationFor(state), "restore-points");
+        await mkdir(restorePointDirectory, { recursive: true });
+        const safetyBackupPath = join(
+          restorePointDirectory,
+          `before-restore-${buildBackupFileName(new Date())}`
+        );
+        state.connection.sqlite.pragma("wal_checkpoint(FULL)");
+        await state.connection.sqlite.backup(safetyBackupPath);
+        await publishBackupEvent(state, "RestoreCompleted", state.storeId, {
+          backupFile: basename(request.payload.filePath),
+          safetyBackup: basename(safetyBackupPath)
+        });
+        state.connection.close();
+        connectionClosed = true;
+        await copyFile(request.payload.filePath, state.dbPath);
+        setTimeout(() => {
+          app.relaunch();
+          app.exit(0);
+        }, 750);
+        return appOk({
+          restored: true,
+          restartScheduled: true,
+          safetyBackupPath
+        });
+      } catch {
+        if (!connectionClosed) {
+          await publishBackupEvent(state, "RestoreFailed", state.storeId, {
+            backupFile: basename(request.payload.filePath)
+          });
+        }
+        return appFail("Restore failed. Your current database was left unchanged.");
+      }
+    }
+  );
 };
 
 const registerProductHandlers = (state: AppState): void => {
@@ -1798,38 +2147,38 @@ const registerInventoryHandlers = (state: AppState): void => {
 
 const registerMigrationHandlers = (state: AppState): void => {
   ipcMain.handle(
-    "orix:migration.ospos.select-files",
-    async (): Promise<OspoMigrationSelectFilesContract["response"]> => {
+    "orix:migration.legacy-stock.select-files",
+    async (): Promise<LegacyStockImportSelectFilesContract["response"]> => {
       if (!can(state, "settings.manage")) {
         return migrationFail("You do not have permission to run migrations.", "MIGRATION_DENIED");
       }
       const result = await dialog.showOpenDialog({
-        title: "Select OSPOS export files",
+        title: "Select legacy stock export files",
         properties: ["openFile", "multiSelections"],
         filters: [
-          { name: "OSPOS exports", extensions: ["csv", "sql"] },
+          { name: "Legacy exports", extensions: ["csv", "sql"] },
           { name: "All files", extensions: ["*"] }
         ]
       });
       if (result.canceled) {
-        return ipcOk({ itemsFile: null, sqlFile: null });
+        return ipcOk({ selectedFiles: [], itemsFile: null, sqlFile: null });
       }
       const itemsFile =
-        result.filePaths.find((filePath) => filePath.toLowerCase().endsWith("ospos_items.csv")) ??
+        result.filePaths.find((filePath) => filePath.toLowerCase().includes("items")) ??
         result.filePaths.find((filePath) => filePath.toLowerCase().endsWith(".csv")) ??
         null;
       const sqlFile =
         result.filePaths.find((filePath) => filePath.toLowerCase().endsWith(".sql")) ?? null;
-      return ipcOk({ itemsFile, sqlFile });
+      return ipcOk({ selectedFiles: result.filePaths, itemsFile, sqlFile });
     }
   );
 
   ipcMain.handle(
-    "orix:migration.ospos.preview",
+    "orix:migration.legacy-stock.preview",
     async (
       _event,
-      request: OspoMigrationPreviewContract["request"]
-    ): Promise<OspoMigrationPreviewContract["response"]> => {
+      request: LegacyStockImportPreviewContract["request"]
+    ): Promise<LegacyStockImportPreviewContract["response"]> => {
       if (!can(state, "settings.manage")) {
         return migrationFail(
           "You do not have permission to preview migrations.",
@@ -1851,17 +2200,17 @@ const registerMigrationHandlers = (state: AppState): void => {
           sampleProducts: preview.sampleProducts
         });
       } catch {
-        return migrationFail("Unable to read OSPOS files.", "MIGRATION_PREVIEW_FAILED");
+        return migrationFail("Unable to read legacy export files.", "MIGRATION_PREVIEW_FAILED");
       }
     }
   );
 
   ipcMain.handle(
-    "orix:migration.ospos.import",
+    "orix:migration.legacy-stock.import",
     async (
       _event,
-      request: OspoMigrationImportContract["request"]
-    ): Promise<OspoMigrationImportContract["response"]> => {
+      request: LegacyStockImportContract["request"]
+    ): Promise<LegacyStockImportContract["response"]> => {
       if (!can(state, "settings.manage")) {
         return migrationFail("You do not have permission to import data.", "MIGRATION_DENIED");
       }
@@ -1870,29 +2219,29 @@ const registerMigrationHandlers = (state: AppState): void => {
           itemsFile: request.payload.itemsFile,
           sqlFile: request.payload.sqlFile
         });
-        return ipcOk(await importOspoProductsAndStock(state, preview, request.payload.mode));
+        return ipcOk(await importLegacyProductsAndStock(state, preview, request.payload.mode));
       } catch {
-        return migrationFail("Unable to import OSPOS products and inventory.", "MIGRATION_FAILED");
+        return migrationFail("Unable to import legacy products and inventory.", "MIGRATION_FAILED");
       }
     }
   );
 };
 
-const importOspoProductsAndStock = async (
+const importLegacyProductsAndStock = async (
   state: AppState,
   preview: Awaited<ReturnType<typeof createOspoMigrationPreview>>,
   mode: "valid-only" | "strict"
-): Promise<OspoMigrationImportResultDto> => {
+): Promise<LegacyStockImportResultDto> => {
   const timestamp = new Date().toISOString();
   const blockingByItemId = blockingIssuesByItemId(preview.issues);
   const globalBlockingIssues = preview.issues.filter(
     (issue) => issue.severity === "error" && issue.itemId === undefined
   );
   if (mode === "strict" && preview.issues.some((issue) => issue.severity === "error")) {
-    throw new Error("OSPOS preview has blocking errors.");
+    throw new Error("Legacy import preview has blocking errors.");
   }
   if (globalBlockingIssues.length > 0) {
-    throw new Error("OSPOS preview is missing required data.");
+    throw new Error("Legacy import preview is missing required data.");
   }
 
   const catalog = state.repositories.productManagement.getCatalog(state.storeId, true);
@@ -1997,7 +2346,7 @@ const importOspoProductsAndStock = async (
   await new PersistedEventPublisher(state.connection).publish({
     id: randomUUID(),
     kind: "domain",
-    name: "OspoMigrationImported",
+    name: "LegacyStockImported",
     version: 1,
     occurredAt: timestamp,
     payload: {
