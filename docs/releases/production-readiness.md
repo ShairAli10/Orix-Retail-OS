@@ -24,27 +24,27 @@ packaging, and Windows-specific checks remain incomplete.
 
 ## Module Status
 
-| Area              | Status          | Notes                                                                                                                                                                 |
-| ----------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Desktop shell     | Partial         | Navigation, theme, status bar, and shell exist. Needs full laptop QA and remaining alignment cleanup.                                                                 |
-| First-run setup   | Partial         | Store, branch, and admin setup exist. Needs stronger recovery and duplicate setup handling.                                                                           |
-| Authentication    | Partial         | Login, PIN login, lock screen, and roles exist. Needs password hashing/security review and admin recovery.                                                            |
-| RBAC              | Partial         | Sidebar/actions are permission-aware. Needs full permission audit across IPC and services.                                                                            |
-| Products/items    | Partial         | CRUD, archive/restore, catalog groups, validation, and persistence exist. Needs duplicate edge-case QA and import reconciliation.                                     |
-| Inventory         | Partial         | Transaction-based stock, adjustments, opening stock, overview, low/out stock views exist. Needs stock take, return flows, and stronger audit screens.                 |
-| Customers         | Partial         | Customer CRUD, payments, account book, statements, and dashboard metrics exist. Needs printable/export polish and sale integration hardening.                         |
-| Suppliers         | Partial         | Supplier CRUD, payments, statement, purchases, and payables exist. Needs reconciliation workflow and better payable aging.                                            |
-| Purchases         | Partial         | Draft, receive, cancel, supplier integration, and stock/ledger effects exist. Needs purchase returns and partial receiving decisions.                                 |
-| POS               | Partial         | Search/barcode entry, cart, sale completion, held sales, receipts, and cash register basics exist. Needs printer/cash drawer hardware, returns, and failure recovery. |
-| Sales history     | Partial         | Sales list and receipt retrieval exist. Needs return/refund and deeper filters.                                                                                       |
-| Ledger            | Partial         | Ledger-derived balances exist through workflows. Needs ledger review screen and consistency diagnostics.                                                              |
-| Expenses          | Missing/Partial | Expense domain exists in architecture; production workflow still needs completion and UI review.                                                                      |
-| Reports           | Missing         | Dashboards exist, but formal printable/exportable reports are not complete.                                                                                           |
-| Backup            | Partial         | One-click backup, verification, restore confirmation, and backup-before-import exist. Needs scheduler, retention, and restore-preview hardening.                      |
-| Legacy import     | Partial         | Previous software stock import exists. Needs rollback report, backup-before-import, and more sample formats.                                                          |
-| Windows installer | Missing         | Must be implemented and tested on Windows before beta.                                                                                                                |
-| Documentation     | Partial         | Architecture docs are strong. Customer/admin docs are missing.                                                                                                        |
-| Testing           | Partial         | Unit/integration tests exist. Needs Playwright/Electron E2E and manual QA scripts.                                                                                    |
+| Area              | Status          | Notes                                                                                                                                                                |
+| ----------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desktop shell     | Partial         | Navigation, theme, status bar, and shell exist. Needs full laptop QA and remaining alignment cleanup.                                                                |
+| First-run setup   | Partial         | Store, branch, and admin setup exist. Needs stronger recovery and duplicate setup handling.                                                                          |
+| Authentication    | Partial         | Login, PIN login, lock screen, and roles exist. Needs password hashing/security review and admin recovery.                                                           |
+| RBAC              | Partial         | Sidebar/actions are permission-aware. Needs full permission audit across IPC and services.                                                                           |
+| Products/items    | Partial         | CRUD, archive/restore, catalog groups, validation, and persistence exist. Needs duplicate edge-case QA and import reconciliation.                                    |
+| Inventory         | Partial         | Transaction-based stock, adjustments, opening stock, overview, low/out stock views exist. Needs stock take, return flows, and stronger audit screens.                |
+| Customers         | Partial         | Customer CRUD, payments, account book, statements, and dashboard metrics exist. Needs printable/export polish and sale integration hardening.                        |
+| Suppliers         | Partial         | Supplier CRUD, payments, statement, purchases, and payables exist. Needs reconciliation workflow and better payable aging.                                           |
+| Purchases         | Partial         | Draft, receive, cancel, supplier integration, and stock/ledger effects exist. Needs purchase returns and partial receiving decisions.                                |
+| POS               | Partial         | Search/barcode entry, cart, sale completion, held sales, receipts, cash register basics, payment guardrails, and failure recovery exist. Needs hardware and returns. |
+| Sales history     | Partial         | Sales list and receipt retrieval exist. Needs return/refund and deeper filters.                                                                                      |
+| Ledger            | Partial         | Ledger-derived balances exist through workflows. Needs ledger review screen and consistency diagnostics.                                                             |
+| Expenses          | Missing/Partial | Expense domain exists in architecture; production workflow still needs completion and UI review.                                                                     |
+| Reports           | Missing         | Dashboards exist, but formal printable/exportable reports are not complete.                                                                                          |
+| Backup            | Partial         | One-click backup, verification, restore confirmation, and backup-before-import exist. Needs scheduler, retention, and restore-preview hardening.                     |
+| Legacy import     | Partial         | Previous software stock import exists. Needs rollback report, backup-before-import, and more sample formats.                                                         |
+| Windows installer | Missing         | Must be implemented and tested on Windows before beta.                                                                                                               |
+| Documentation     | Partial         | Architecture docs are strong. Customer/admin docs are missing.                                                                                                       |
+| Testing           | Partial         | Unit/integration tests exist. Needs Playwright/Electron E2E and manual QA scripts.                                                                                   |
 
 ## Beta Blockers
 
@@ -354,5 +354,5 @@ Version 1.0 requires beta criteria plus:
 
 ## Current Recommendation
 
-Backup and Restore has a usable customer-facing foundation. The current implementation phase is
-Reports MVP, followed by POS production hardening.
+Backup and Restore and Reports MVP have usable customer-facing foundations. The current
+implementation phase is POS production hardening, followed by returns and reversals.

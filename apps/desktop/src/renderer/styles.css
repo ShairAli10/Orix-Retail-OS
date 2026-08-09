@@ -2144,6 +2144,30 @@ tbody tr:hover {
   background: var(--surface-2);
 }
 
+.pos-ready-note,
+.pos-warning-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.pos-ready-note {
+  border: 1px solid color-mix(in srgb, var(--success) 32%, var(--border));
+  background: color-mix(in srgb, var(--success) 9%, var(--surface));
+  color: var(--success);
+}
+
+.pos-warning-note {
+  border: 1px solid color-mix(in srgb, var(--warning) 42%, var(--border));
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
+  color: var(--warning);
+}
+
 .totals-card .detail-row:last-of-type {
   border-top: 1px solid var(--border);
   margin-top: 4px;
@@ -2265,6 +2289,34 @@ tbody tr:hover {
   display: flex;
   justify-content: space-between;
   gap: 12px;
+}
+
+.held-sale-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.held-sale-row div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.held-sale-row span,
+.held-sale-row small {
+  color: var(--muted);
+}
+
+.held-sale-row strong,
+.held-sale-row span,
+.held-sale-row small {
+  overflow-wrap: anywhere;
 }
 
 .shortcut-bar {
@@ -2595,7 +2647,8 @@ tbody tr:hover {
   }
 
   .pos-toolbar,
-  .cart-line {
+  .cart-line,
+  .held-sale-row {
     grid-template-columns: 1fr;
   }
 

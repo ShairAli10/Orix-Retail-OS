@@ -486,6 +486,10 @@ const fromMinor = (value: number): string => (value / 100).toFixed(2);
 const errorMessage = (error: ProductIpcError | undefined): string =>
   error?.message ?? "Something went wrong.";
 
+const noop = (): void => {
+  // Intentionally empty callback for read-only receipt previews.
+};
+
 class ErrorBoundary extends Component<{ readonly children: ReactNode }, ErrorBoundaryState> {
   public constructor(props: { readonly children: ReactNode }) {
     super(props);
@@ -2339,6 +2343,11 @@ const PosModule = ({
   const [heldSales, setHeldSales] = useState<readonly SaleListItemDto[]>([]);
   const [showHeld, setShowHeld] = useState(false);
   const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
+  const [saleProcessing, setSaleProcessing] = useState<"complete" | "hold" | "cancel-held" | null>(
+    null
+  );
+  const [lastSaleError, setLastSaleError] = useState<string | null>(null);
+  const [printStatus, setPrintStatus] = useState<"idle" | "sent">("idle");
   const canCreate = permissions.includes("sales.create");
   const canComplete = permissions.includes("sales.complete");
   const canCancel = permissions.includes("sales.cancel");
@@ -2415,6 +2424,7 @@ const PosModule = ({
       }
       if (event.ctrlKey && event.key.toLowerCase() === "p" && receipt !== null) {
         event.preventDefault();
+        setPrintStatus("sent");
         window.print();
       }
       if (event.key === "Escape") {
@@ -2528,6 +2538,11 @@ const PosModule = ({
 
   const holdSale = async () => {
     if (!canCreate) return;
+    if (form.items.length === 0) {
+      showToast("Add at least one item before holding a sale.", "error");
+      return;
+    }
+    setSaleProcessing("hold");
     const response = await window.orix.sales.hold({
       ...toSalePayload(),
       holdReason: form.holdReason || "Held from POS"
@@ -2535,24 +2550,40 @@ const PosModule = ({
     if (response.ok) {
       showToast("Sale held.");
       setForm(emptySaleForm);
+      setLastSaleError(null);
       await loadPosData();
     } else {
-      showToast(response.error.message, "error");
+      const message = posSaleErrorMessage(response.error.message, response.error.fields);
+      setLastSaleError(message);
+      showToast(message, "error");
     }
+    setSaleProcessing(null);
   };
 
   const completeSale = async () => {
     if (!canComplete) return;
+    const blockingMessage = posBlockingMessage(form, totals.totalMinor);
+    if (blockingMessage !== null) {
+      setLastSaleError(blockingMessage);
+      showToast(blockingMessage, "error");
+      return;
+    }
+    setSaleProcessing("complete");
     setShowCompleteConfirm(false);
     const response = await window.orix.sales.complete(toSalePayload());
     if (response.ok) {
       setReceipt(response.value.receipt);
       setForm(emptySaleForm);
+      setLastSaleError(null);
+      setPrintStatus("idle");
       showToast("Sale completed.");
       await loadPosData();
     } else {
-      showToast(response.error.message, "error");
+      const message = posSaleErrorMessage(response.error.message, response.error.fields);
+      setLastSaleError(message);
+      showToast(message, "error");
     }
+    setSaleProcessing(null);
   };
 
   const resumeSale = async (sale: SaleListItemDto) => {
@@ -2591,6 +2622,7 @@ const PosModule = ({
 
   const cancelHeldSale = async (sale: SaleListItemDto) => {
     if (!canCancel) return;
+    setSaleProcessing("cancel-held");
     const response = await window.orix.sales.cancel(sale.id, "Cancelled from POS");
     if (response.ok) {
       showToast("Held sale deleted.");
@@ -2598,12 +2630,19 @@ const PosModule = ({
     } else {
       showToast(response.error.message, "error");
     }
+    setSaleProcessing(null);
   };
 
   const totals = saleTotals(form);
   const change = Math.max(0, toMinor(form.cashReceived) - totals.totalMinor);
-  const creditBalance = form.paymentType === "credit" ? totals.totalMinor : 0;
+  const creditBalance =
+    form.paymentType === "credit"
+      ? totals.totalMinor
+      : form.paymentType === "mixed"
+        ? Math.max(0, totals.totalMinor - toMinor(form.cashReceived))
+        : 0;
   const selectedCustomer = customers.find((customer) => customer.id === form.customerId);
+  const blockingMessage = posBlockingMessage(form, totals.totalMinor);
 
   return (
     <section className="pos-module">
@@ -2861,6 +2900,14 @@ const PosModule = ({
             <Detail label="Change" value={money(change)} />
             <Detail label="Credit" value={money(creditBalance)} />
           </div>
+          {blockingMessage === null && lastSaleError === null ? (
+            <div className="pos-ready-note">
+              <Icon name="receipt" />
+              Ready for checkout
+            </div>
+          ) : (
+            <div className="pos-warning-note">{blockingMessage ?? lastSaleError}</div>
+          )}
           <textarea
             placeholder="Sale notes"
             value={form.notes}
@@ -2869,27 +2916,31 @@ const PosModule = ({
             }}
           />
           <div className="pos-actions">
-            <button disabled={!canCreate} onClick={() => void holdSale()}>
+            <button
+              disabled={!canCreate || saleProcessing !== null}
+              onClick={() => void holdSale()}
+            >
               <Icon name="pause" />
-              Hold
+              {saleProcessing === "hold" ? "Holding" : "Hold"}
             </button>
             <button
+              disabled={saleProcessing !== null}
               onClick={() => {
                 setShowHeld(true);
               }}
             >
               <Icon name="play" />
-              Held
+              Held {heldSales.length > 0 ? `(${String(heldSales.length)})` : ""}
             </button>
             <button
               className="primary"
-              disabled={!canComplete || form.items.length === 0}
+              disabled={!canComplete || saleProcessing !== null || blockingMessage !== null}
               onClick={() => {
                 setShowCompleteConfirm(true);
               }}
             >
               <Icon name="receipt" />
-              Complete Sale
+              {saleProcessing === "complete" ? "Completing" : "Complete Sale"}
             </button>
           </div>
         </div>
@@ -2958,9 +3009,13 @@ const PosModule = ({
               >
                 Review Sale
               </button>
-              <button className="primary" onClick={() => void completeSale()}>
+              <button
+                className="primary"
+                disabled={saleProcessing !== null || blockingMessage !== null}
+                onClick={() => void completeSale()}
+              >
                 <Icon name="receipt" />
-                Confirm & Print Receipt
+                {saleProcessing === "complete" ? "Saving Sale" : "Confirm Sale"}
               </button>
             </footer>
           </section>
@@ -2987,11 +3042,25 @@ const PosModule = ({
                 />
               ) : (
                 heldSales.map((sale) => (
-                  <div className="activity-item" key={sale.id}>
-                    <strong>{sale.saleNumber}</strong>
-                    <span>{money(sale.totalMinor)}</span>
-                    <button onClick={() => void resumeSale(sale)}>Resume</button>
-                    <button disabled={!canCancel} onClick={() => void cancelHeldSale(sale)}>
+                  <div className="held-sale-row" key={sale.id}>
+                    <div>
+                      <strong>{sale.saleNumber}</strong>
+                      <span>{sale.customerName ?? "Walk-in Customer"}</span>
+                      <small>
+                        {sale.itemCount} items · {new Date(sale.saleDate).toLocaleString("en-PK")}
+                      </small>
+                    </div>
+                    <strong>{money(sale.totalMinor)}</strong>
+                    <button
+                      disabled={saleProcessing !== null}
+                      onClick={() => void resumeSale(sale)}
+                    >
+                      Resume
+                    </button>
+                    <button
+                      disabled={!canCancel || saleProcessing !== null}
+                      onClick={() => void cancelHeldSale(sale)}
+                    >
                       Delete
                     </button>
                   </div>
@@ -3007,8 +3076,13 @@ const PosModule = ({
           receipt={receipt}
           settings={settings}
           canPrint={canPrint}
+          printStatus={printStatus}
+          onPrint={() => {
+            setPrintStatus("sent");
+          }}
           onClose={() => {
             setReceipt(null);
+            setPrintStatus("idle");
           }}
         />
       )}
@@ -3021,12 +3095,16 @@ const ReceiptPreview = ({
   receipt,
   settings,
   canPrint,
+  printStatus,
+  onPrint,
   onClose
 }: {
   readonly context: AppContextDto | null;
   readonly receipt: ReceiptDto;
   readonly settings: AppSettingsDto | null;
   readonly canPrint: boolean;
+  readonly printStatus: "idle" | "sent";
+  readonly onPrint: () => void;
   readonly onClose: () => void;
 }) => {
   const configuredHeader = settings?.receiptHeader.trim();
@@ -3066,7 +3144,9 @@ const ReceiptPreview = ({
         </header>
         <div className="receipt-success">
           <Icon name="receipt" />
-          <span>Sale saved successfully</span>
+          <span>
+            {printStatus === "sent" ? "Receipt sent to system printer" : "Sale saved successfully"}
+          </span>
           <strong>{money(receipt.totalMinor)}</strong>
         </div>
         <div className="receipt-paper">
@@ -3128,11 +3208,12 @@ const ReceiptPreview = ({
             className="primary"
             disabled={!canPrint}
             onClick={() => {
+              onPrint();
               window.print();
             }}
           >
             <Icon name="receipt" />
-            Print Receipt
+            {printStatus === "sent" ? "Print Again" : "Print Receipt"}
           </button>
         </footer>
       </section>
@@ -3317,6 +3398,8 @@ const SalesModule = ({
           receipt={receipt}
           settings={settings}
           canPrint={canPrint}
+          printStatus="idle"
+          onPrint={noop}
           onClose={() => {
             setReceipt(null);
           }}
@@ -3392,6 +3475,51 @@ const saleTotals = (
     subtotalMinor,
     totalMinor: subtotalMinor - toMinor(form.discount) + toMinor(form.tax)
   };
+};
+
+const posBlockingMessage = (form: SaleFormState, totalMinor: number): string | null => {
+  const cashReceivedMinor = toMinor(form.cashReceived);
+  if (form.items.length === 0) return "Scan or search an item to start checkout.";
+  if (totalMinor <= 0) return "Sale total must be greater than zero.";
+  if (Number.isNaN(cashReceivedMinor) || cashReceivedMinor < 0) {
+    return "Enter a valid cash received amount.";
+  }
+  if (form.paymentType === "cash" && cashReceivedMinor < totalMinor) {
+    return `Cash received is short by ${money(totalMinor - cashReceivedMinor)}.`;
+  }
+  if (form.paymentType === "credit" && form.customerId.trim() === "") {
+    return "Select a customer before completing a credit sale.";
+  }
+  if (form.paymentType === "mixed") {
+    if (form.customerId.trim() === "") {
+      return "Select a customer before completing a cash + credit sale.";
+    }
+    if (cashReceivedMinor <= 0) return "Enter the cash portion for this mixed payment.";
+    if (cashReceivedMinor >= totalMinor) {
+      return "For full cash payment, choose Cash instead of Cash + Credit.";
+    }
+  }
+  const overstocked = form.items.find((item) => item.currentStock < item.quantity);
+  if (overstocked !== undefined) {
+    return `${overstocked.productName} has only ${String(overstocked.currentStock)} in stock.`;
+  }
+  return null;
+};
+
+const posSaleErrorMessage = (message: string, fields: readonly string[] | undefined): string => {
+  if (fields?.includes("cashReceivedMinor")) {
+    return "Check the cash received amount before completing this sale.";
+  }
+  if (fields?.includes("customerId")) {
+    return "Select a customer for credit or mixed payment.";
+  }
+  if (fields?.includes("items")) {
+    return "Add at least one item before completing this sale.";
+  }
+  if (message.toLowerCase().includes("insufficient stock")) {
+    return `${message} Adjust quantity or update stock before completing.`;
+  }
+  return message;
 };
 
 const SupplierModule = ({

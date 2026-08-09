@@ -194,4 +194,56 @@ describe("SaleManagementApplicationService", () => {
     expect(result.ok).toBe(false);
     expect(setup.transactionCount()).toBe(0);
   });
+
+  it("requires a customer and partial cash for mixed payments", async () => {
+    const setup = createService();
+
+    const noCustomer = await setup.service.completeSale({
+      storeId: "store-1",
+      branchId: "branch-1",
+      businessDayId: "day-1",
+      userId: "user-1",
+      saleDate: "2026-06-30T10:00:00.000Z",
+      paymentType: "mixed",
+      discountMinor: 0,
+      taxMinor: 0,
+      cashReceivedMinor: 3000,
+      items: [
+        {
+          productId: "product-1",
+          unitId: "unit-1",
+          quantity: 1,
+          unitPriceMinor: 5000,
+          discountMinor: 0,
+          taxMinor: 0
+        }
+      ]
+    });
+    const fullCash = await setup.service.completeSale({
+      storeId: "store-1",
+      branchId: "branch-1",
+      businessDayId: "day-1",
+      userId: "user-1",
+      customerId: "customer-1",
+      saleDate: "2026-06-30T10:00:00.000Z",
+      paymentType: "mixed",
+      discountMinor: 0,
+      taxMinor: 0,
+      cashReceivedMinor: 5000,
+      items: [
+        {
+          productId: "product-1",
+          unitId: "unit-1",
+          quantity: 1,
+          unitPriceMinor: 5000,
+          discountMinor: 0,
+          taxMinor: 0
+        }
+      ]
+    });
+
+    expect(noCustomer.ok).toBe(false);
+    expect(fullCash.ok).toBe(false);
+    expect(setup.transactionCount()).toBe(0);
+  });
 });

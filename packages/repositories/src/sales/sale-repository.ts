@@ -684,6 +684,29 @@ export class SaleRepository extends BaseRepository<typeof sales> {
         0,
         "Credit sale"
       );
+    } else if (input.paymentType === "mixed") {
+      const cashMinor = Math.min(input.cashReceivedMinor, sale.totalMinor);
+      const receivableMinor = sale.totalMinor - cashMinor;
+      this.insertLedgerEntry(
+        transactionId,
+        accounts.cashAccountId,
+        "cash",
+        null,
+        null,
+        cashMinor,
+        0,
+        "Mixed sale cash portion"
+      );
+      this.insertLedgerEntry(
+        transactionId,
+        accounts.receivableAccountId,
+        "receivable",
+        "customer",
+        input.customerId ?? null,
+        receivableMinor,
+        0,
+        "Mixed sale credit portion"
+      );
     } else {
       this.insertLedgerEntry(
         transactionId,

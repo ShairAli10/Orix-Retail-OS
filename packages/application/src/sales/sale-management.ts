@@ -91,9 +91,9 @@ export class SaleManagementApplicationService {
   public async completeSale(input: SaleWrite): Promise<CoreResult<SaleMutationOutput>> {
     const validation = this.validateSale(input, "completed");
     if (!validation.ok) return validation;
-    if (input.paymentType === "credit") {
+    if (input.paymentType === "credit" || input.paymentType === "mixed") {
       if (input.customerId === undefined || input.customerId === null) {
-        return err(validationError("Credit sale requires a customer.", ["customerId"]));
+        return err(validationError("Credit or mixed payment requires a customer.", ["customerId"]));
       }
       const customer = this.context.repositories.customers.getCustomer(input.customerId);
       if (!customer.ok) return customer;
@@ -168,6 +168,13 @@ export class SaleManagementApplicationService {
       targetStatus === "completed" &&
       input.paymentType === "cash" &&
       input.cashReceivedMinor < totalMinor
+    ) {
+      fields.push("cashReceivedMinor");
+    }
+    if (
+      targetStatus === "completed" &&
+      input.paymentType === "mixed" &&
+      (input.cashReceivedMinor <= 0 || input.cashReceivedMinor >= totalMinor)
     ) {
       fields.push("cashReceivedMinor");
     }
