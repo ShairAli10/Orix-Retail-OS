@@ -67,7 +67,8 @@ const purchases = {
   get: (id) => request("orix:purchases.get", { id }),
   saveDraft: (payload) => request("orix:purchases.save-draft", payload),
   receive: (id) => request("orix:purchases.receive", { id }),
-  cancel: (id, reason) => request("orix:purchases.cancel", { id, reason })
+  cancel: (id, reason) => request("orix:purchases.cancel", { id, reason }),
+  returnPurchase: (payload) => request("orix:purchases.return", payload)
 };
 
 const sales = {
@@ -77,6 +78,7 @@ const sales = {
   hold: (payload) => request("orix:sales.hold", payload),
   complete: (payload) => request("orix:sales.complete", payload),
   cancel: (id, reason) => request("orix:sales.cancel", { id, reason }),
+  returnSale: (payload) => request("orix:sales.return", payload),
   receipt: (saleId) => request("orix:sales.receipt", { saleId }),
   dashboard: () => request("orix:sales.dashboard", {})
 };
@@ -112,7 +114,11 @@ const inventory = {
   list: (payload) => request("orix:inventory.list", payload),
   movements: (payload) => request("orix:inventory.movements", payload),
   adjust: (payload) => request("orix:inventory.adjust", payload),
-  openingStock: (payload) => request("orix:inventory.opening-stock", payload)
+  openingStock: (payload) => request("orix:inventory.opening-stock", payload),
+  stockTakes: () => request("orix:inventory.stock-takes", {}),
+  getStockTake: (id) => request("orix:inventory.stock-take.get", { id }),
+  startStockTake: (payload) => request("orix:inventory.stock-take.start", payload),
+  completeStockTake: (payload) => request("orix:inventory.stock-take.complete", payload)
 };
 
 const migration = {

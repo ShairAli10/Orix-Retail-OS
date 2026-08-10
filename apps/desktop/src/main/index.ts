@@ -540,6 +540,7 @@ const initializeAppState = (): AppState => {
 
 const resolveMigrationsFolder = (): string => {
   const candidates = [
+    join(process.resourcesPath, "migrations"),
     join(app.getAppPath(), "packages/database/src/migrations"),
     join(app.getAppPath(), "../../packages/database/src/migrations"),
     join(process.cwd(), "packages/database/src/migrations")

@@ -2,15 +2,15 @@
 
 Offline-first desktop Retail Management System for Windows, developed on macOS by Orix Tech.
 
-This repository currently contains the project foundation only. Product modules such as POS,
-inventory, ledger, reports, authentication, and database schema are intentionally not implemented
-yet.
+This repository contains the working offline-first desktop application foundation and active retail
+modules for products, inventory, customers, suppliers, purchases, POS, reports, backup/restore,
+returns, stock take, and Windows packaging.
 
 ## Foundation
 
-- Electron desktop shell planned under `apps/desktop`
-- React, TypeScript, Vite, Tailwind CSS, and shadcn/ui planned for the renderer
-- SQLite, better-sqlite3, and Drizzle ORM planned for local persistence
+- Electron desktop shell under `apps/desktop`
+- React, TypeScript, and Vite renderer
+- SQLite, better-sqlite3, and Drizzle ORM local persistence
 - Layered architecture enforced through package boundaries
 - pnpm workspace with TypeScript project references
 
@@ -31,4 +31,11 @@ pnpm typecheck
 pnpm lint
 pnpm test
 pnpm check
+pnpm desktop:smoke
+pnpm pack:win
+pnpm dist:win
 ```
+
+`pnpm dist:win` creates the Windows installer in `release/windows/`. Customer data is stored under
+Electron `userData`, so installing a newer version updates the app without replacing the SQLite
+database.

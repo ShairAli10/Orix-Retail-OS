@@ -37,8 +37,7 @@ installer validation in the target environment.
 
 ## Installer
 
-Use a standard Windows installer flow after the app shell exists. Electron Builder or Electron Forge
-should be evaluated before implementation.
+Use Electron Builder with an NSIS installer.
 
 The installer must:
 
@@ -47,3 +46,14 @@ The installer must:
 - Bundle all required runtime assets
 - Work without internet access after installation
 - Support future upgrades and database migrations
+
+Current commands:
+
+```sh
+pnpm pack:win
+pnpm dist:win
+```
+
+Upgrade rule: customer data must live in Electron's `userData` folder, not in the installation
+directory. Running a newer installer replaces application files, keeps
+`orix-retail-os.sqlite`, and runs pending migrations on startup.

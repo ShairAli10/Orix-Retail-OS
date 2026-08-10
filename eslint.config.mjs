@@ -8,6 +8,7 @@ export default tseslint.config(
       "**/dist/**",
       "**/coverage/**",
       "**/node_modules/**",
+      "**/release/**",
       "*.config.ts",
       "**/*.config.ts",
       "*.config.mjs",
