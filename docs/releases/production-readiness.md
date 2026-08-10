@@ -42,7 +42,7 @@ packaging, and Windows-specific checks remain incomplete.
 | Reports           | Missing         | Dashboards exist, but formal printable/exportable reports are not complete.                                                                                     |
 | Backup            | Partial         | One-click backup, verification, restore confirmation, and backup-before-import exist. Needs scheduler, retention, and restore-preview hardening.                |
 | Legacy import     | Partial         | Previous software stock import exists. Needs rollback report, backup-before-import, and more sample formats.                                                    |
-| Windows installer | Missing         | Must be implemented and tested on Windows before beta.                                                                                                          |
+| Windows installer | Partial         | NSIS installer build exists with upgrade-safe app data policy. Needs clean Windows install and upgrade QA on target hardware.                                   |
 | Documentation     | Partial         | Architecture docs are strong. Customer/admin docs are missing.                                                                                                  |
 | Testing           | Partial         | Unit/integration tests exist. Needs Playwright/Electron E2E and manual QA scripts.                                                                              |
 
@@ -58,9 +58,9 @@ These must be completed before installing the product for a real shop beta.
    - Clear backup location in settings.
 
 2. Windows installer
-   - Build Windows installer from macOS or CI.
-   - Validate native SQLite dependency packaging.
-   - App icon, metadata, version, install path, and uninstall behavior.
+   - Build Windows installer from macOS or CI. Complete from macOS.
+   - Validate native SQLite dependency packaging. Complete for packaged artifact inspection.
+   - App icon, metadata, version, install path, and uninstall behavior. Partial; real Windows QA remains.
    - Fresh install test on a clean Windows machine.
 
 3. POS hardening
@@ -258,6 +258,10 @@ Exit criteria:
 - App opens after install.
 - Existing database survives upgrades.
 
+Status: Partial. The NSIS installer and unpacked Windows app build successfully from macOS, package
+migrations and native SQLite correctly, and preserve the app data directory across upgrades.
+Clean Windows installation and install-over-existing-app testing remain required on target hardware.
+
 ### Phase 14: Security and Permission Audit
 
 Goal: close obvious security and authorization gaps before release.
@@ -361,6 +365,6 @@ Version 1.0 requires beta criteria plus:
 
 ## Current Recommendation
 
-Backup and Restore, Reports MVP, POS hardening, returns, and stock take now have usable
-customer-facing foundations. The next implementation phase should focus on Windows installer and
-upgrade-path validation, followed by security/permission audit and production QA documentation.
+Backup and Restore, Reports MVP, POS hardening, returns, stock take, and Windows installer
+packaging now have usable foundations. The next implementation phase should focus on
+security/permission audit, followed by production QA documentation and real Windows upgrade testing.

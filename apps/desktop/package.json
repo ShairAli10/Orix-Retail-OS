@@ -1,10 +1,17 @@
 {
   "name": "@orix/desktop",
   "version": "0.0.0",
+  "description": "Offline-first desktop retail management system for Windows.",
+  "author": {
+    "name": "ORIX TECH"
+  },
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && pnpm build:main && vite build",
+    "build:main": "esbuild src/main/index.ts --bundle --platform=node --target=node20 --format=esm --external:electron --external:better-sqlite3 --outfile=dist/main/index.js",
+    "dist:win": "pnpm build && electron-builder --win nsis --x64",
+    "pack:win": "pnpm build && electron-builder --win dir --x64",
     "smoke": "env -u ELECTRON_RUN_AS_NODE electron . --smoke",
     "typecheck": "tsc -b"
   },
@@ -20,11 +27,12 @@
     "@orix/ui": "workspace:*",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "electron": "^33.4.11",
+    "better-sqlite3": "^11.7.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "electron": "^33.4.11",
     "vite": "^6.0.0"
   },
   "main": "electron-main.cjs"

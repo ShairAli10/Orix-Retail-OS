@@ -1,0 +1,48 @@
+appId: tech.orix.retailos
+productName: Orix Retail OS
+copyright: Copyright © 2026 ORIX TECH
+
+directories:
+  output: ../../release/windows
+  buildResources: build
+
+files:
+  - electron-main.cjs
+  - preload.cjs
+  - package.json
+  - dist/main/**/*
+  - dist/renderer/**/*
+
+extraResources:
+  - from: ../../packages/database/src/migrations
+    to: migrations
+    filter:
+      - "**/*"
+
+asar: true
+asarUnpack:
+  - node_modules/better-sqlite3/build/Release/*.node
+
+npmRebuild: true
+nodeGypRebuild: false
+compression: maximum
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+  executableName: Orix Retail OS
+  artifactName: Orix-Retail-OS-Setup-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: false
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Orix Retail OS
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
