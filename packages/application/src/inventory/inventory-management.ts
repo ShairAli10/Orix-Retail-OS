@@ -7,7 +7,11 @@ import type {
   InventoryMovementQuery,
   InventoryOverview,
   InventoryPage,
-  InventoryTransactionWrite
+  InventoryTransactionWrite,
+  StockTakeCompleteWrite,
+  StockTakeDetail,
+  StockTakeListItem,
+  StockTakeStartWrite
 } from "@orix/repositories";
 import { applicationError } from "../shared/errors.js";
 import type { ApplicationServiceContext } from "../shared/service-context.js";
@@ -50,6 +54,9 @@ export type OpeningStockBulkInput = {
   readonly entries: readonly OpeningStockEntryInput[];
 };
 
+export type StockTakeStartInput = StockTakeStartWrite;
+export type StockTakeCompleteInput = StockTakeCompleteWrite;
+
 const validationError = (message: string, fields?: readonly string[]): CoreError =>
   applicationError(
     "APPLICATION_VALIDATION_FAILED",
@@ -73,6 +80,14 @@ export class InventoryManagementApplicationService {
 
   public listMovements(query: InventoryMovementQuery): CoreResult<InventoryMovementPage> {
     return this.context.repositories.inventory.listMovements(query);
+  }
+
+  public listStockTakes(storeId: string): CoreResult<readonly StockTakeListItem[]> {
+    return this.context.repositories.inventory.listStockTakes(storeId);
+  }
+
+  public getStockTake(id: string): CoreResult<StockTakeDetail | undefined> {
+    return this.context.repositories.inventory.getStockTake(id);
   }
 
   public async adjustStock(
@@ -207,6 +222,69 @@ export class InventoryManagementApplicationService {
     return this.publishAfterCommit(output, events);
   }
 
+  public async startStockTake(
+    input: StockTakeStartInput
+  ): Promise<CoreResult<{ readonly stockTake: StockTakeDetail }>> {
+    const validation = this.validateStockTakeStart(input);
+    if (!validation.ok) return validation;
+    const events: ApplicationEvent[] = [];
+    const result = await this.context.transactionRunner.run(
+      { name: "inventory.stock-take.start", metadata: { actorId: input.userId } },
+      () => {
+        const stockTake = this.context.repositories.inventory.startStockTake(input);
+        if (!stockTake.ok) return Promise.resolve(stockTake);
+        events.push(
+          this.event(
+            "InventoryCountStarted",
+            stockTake.value.id,
+            input.storeId,
+            input.userId,
+            input.startedAt
+          )
+        );
+        return Promise.resolve(ok({ stockTake: stockTake.value }));
+      }
+    );
+    return this.publishAfterCommit(result, events);
+  }
+
+  public async completeStockTake(
+    input: StockTakeCompleteInput
+  ): Promise<CoreResult<{ readonly stockTake: StockTakeDetail }>> {
+    const validation = this.validateStockTakeComplete(input);
+    if (!validation.ok) return validation;
+    const events: ApplicationEvent[] = [];
+    const result = await this.context.transactionRunner.run(
+      { name: "inventory.stock-take.complete", metadata: { actorId: input.userId } },
+      () => {
+        const stockTake = this.context.repositories.inventory.completeStockTake(input);
+        if (!stockTake.ok) return Promise.resolve(stockTake);
+        events.push(
+          this.event(
+            "InventoryCountCompleted",
+            stockTake.value.id,
+            input.storeId,
+            input.userId,
+            input.completedAt
+          )
+        );
+        if (stockTake.value.varianceCount > 0) {
+          events.push(
+            this.event(
+              "InventoryAdjusted",
+              stockTake.value.id,
+              input.storeId,
+              input.userId,
+              input.completedAt
+            )
+          );
+        }
+        return Promise.resolve(ok({ stockTake: stockTake.value }));
+      }
+    );
+    return this.publishAfterCommit(result, events);
+  }
+
   private validateAdjustment(input: InventoryAdjustmentInput): CoreResult<void> {
     const fields: string[] = [];
     if (input.productId.trim() === "") fields.push("productId");
@@ -216,6 +294,29 @@ export class InventoryManagementApplicationService {
       return err(validationError("Inventory adjustment is missing required fields.", fields));
     }
     return ok(undefined);
+  }
+
+  private validateStockTakeStart(input: StockTakeStartInput): CoreResult<void> {
+    const fields: string[] = [];
+    if (input.startedAt.trim() === "") fields.push("startedAt");
+    if (input.scopeType === "partial" && input.productIds.length === 0) fields.push("productIds");
+    return fields.length > 0
+      ? err(validationError("Stock take setup is missing required fields.", fields))
+      : ok(undefined);
+  }
+
+  private validateStockTakeComplete(input: StockTakeCompleteInput): CoreResult<void> {
+    const fields: string[] = [];
+    if (input.countId.trim() === "") fields.push("countId");
+    if (input.completedAt.trim() === "") fields.push("completedAt");
+    if (input.counts.length === 0) fields.push("counts");
+    for (const count of input.counts) {
+      if (count.productId.trim() === "") fields.push("productId");
+      if (count.countedQuantity < 0) fields.push("countedQuantity");
+    }
+    return fields.length > 0
+      ? err(validationError("Stock take counts are missing or invalid.", [...new Set(fields)]))
+      : ok(undefined);
   }
 
   private event(

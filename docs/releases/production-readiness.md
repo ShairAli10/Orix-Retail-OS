@@ -31,7 +31,7 @@ packaging, and Windows-specific checks remain incomplete.
 | Authentication    | Partial         | Login, PIN login, lock screen, and roles exist. Needs password hashing/security review and admin recovery.                                                      |
 | RBAC              | Partial         | Sidebar/actions are permission-aware. Needs full permission audit across IPC and services.                                                                      |
 | Products/items    | Partial         | CRUD, archive/restore, catalog groups, validation, and persistence exist. Needs duplicate edge-case QA and import reconciliation.                               |
-| Inventory         | Partial         | Transaction-based stock, adjustments, opening stock, overview, low/out stock views exist. Needs stock take, return flows, and stronger audit screens.           |
+| Inventory         | Partial         | Transaction-based stock, adjustments, opening stock, stock take, overview, low/out stock views exist. Needs stronger audit review screens.                      |
 | Customers         | Partial         | Customer CRUD, payments, account book, statements, and dashboard metrics exist. Needs printable/export polish and sale integration hardening.                   |
 | Suppliers         | Partial         | Supplier CRUD, payments, statement, purchases, and payables exist. Needs reconciliation workflow and better payable aging.                                      |
 | Purchases         | Partial         | Draft, receive, cancel, supplier integration, purchase returns, and stock/ledger effects exist. Needs partial receiving decisions.                              |
@@ -100,9 +100,9 @@ These can come after beta but must be complete before calling the product Versio
    - Ledger reversal rules. Complete for return transactions; broader reversal tooling remains.
 
 2. Stock take
-   - Count workflow.
-   - Variance review.
-   - Approval-ready adjustment posting.
+   - Count workflow. Complete.
+   - Variance review. Complete.
+   - Approval-ready adjustment posting. Partial; approval metadata exists, second-user approval remains future hardening.
 
 3. Reporting suite
    - Sales report.
@@ -236,6 +236,9 @@ Exit criteria:
 - Variances are auditable.
 - Large counts remain usable on laptop screens.
 
+Status: Complete for beta workflow coverage. Partial counts, second-user approval, and
+barcode-assisted count entry remain Version 1.0 polish.
+
 ### Phase 13: Windows Installer and Upgrade Path
 
 Goal: make the product installable by a non-technical customer.
@@ -358,5 +361,6 @@ Version 1.0 requires beta criteria plus:
 
 ## Current Recommendation
 
-Backup and Restore and Reports MVP have usable customer-facing foundations. The current
-implementation phase is POS production hardening, followed by returns and reversals.
+Backup and Restore, Reports MVP, POS hardening, returns, and stock take now have usable
+customer-facing foundations. The next implementation phase should focus on Windows installer and
+upgrade-path validation, followed by security/permission audit and production QA documentation.

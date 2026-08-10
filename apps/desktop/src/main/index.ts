@@ -50,6 +50,10 @@ import type {
   InventoryMovementsContract,
   InventoryOpeningStockContract,
   InventoryOverviewContract,
+  InventoryStockTakeCompleteContract,
+  InventoryStockTakeGetContract,
+  InventoryStockTakeStartContract,
+  InventoryStockTakesContract,
   ProductArchiveContract,
   ProductCatalogArchiveContract,
   ProductCatalogGetContract,
@@ -1025,6 +1029,12 @@ const inventoryError = (error: CoreError): InventoryIpcError => {
 
 const toInventoryIpc = <T>(result: CoreResult<T>): Result<T, InventoryIpcError> =>
   result.ok ? ipcOk(result.value) : ipcErr(inventoryError(result.error));
+
+const inventoryPermissionDenied = <T>(): Result<T, InventoryIpcError> =>
+  ipcErr({
+    code: "INVENTORY_PERMISSION_DENIED",
+    message: "You do not have permission for this action."
+  });
 
 const customerError = (error: CoreError): CustomerIpcError => {
   const fields =
@@ -2440,6 +2450,56 @@ const registerInventoryHandlers = (state: AppState): void => {
           userId: state.userId
         })
       )
+  );
+  ipcMain.handle("orix:inventory.stock-takes", (): InventoryStockTakesContract["response"] => {
+    if (!can(state, "inventory.view")) {
+      return inventoryPermissionDenied();
+    }
+    const result = state.inventoryService.listStockTakes(state.storeId);
+    return result.ok ? ipcOk({ items: result.value }) : ipcErr(inventoryError(result.error));
+  });
+  ipcMain.handle(
+    "orix:inventory.stock-take.get",
+    (_event, request: InventoryStockTakeGetContract["request"]) => {
+      if (!can(state, "inventory.view")) {
+        return inventoryPermissionDenied();
+      }
+      return toInventoryIpc(state.inventoryService.getStockTake(request.payload.id));
+    }
+  );
+  ipcMain.handle(
+    "orix:inventory.stock-take.start",
+    async (_event, request: InventoryStockTakeStartContract["request"]) => {
+      if (!can(state, "inventory.manage")) {
+        return inventoryPermissionDenied();
+      }
+      return toInventoryIpc(
+        await state.inventoryService.startStockTake({
+          ...request.payload,
+          storeId: state.storeId,
+          branchId: state.branchId,
+          businessDayId: state.businessDayId,
+          userId: state.userId
+        })
+      );
+    }
+  );
+  ipcMain.handle(
+    "orix:inventory.stock-take.complete",
+    async (_event, request: InventoryStockTakeCompleteContract["request"]) => {
+      if (!can(state, "inventory.manage")) {
+        return inventoryPermissionDenied();
+      }
+      return toInventoryIpc(
+        await state.inventoryService.completeStockTake({
+          ...request.payload,
+          storeId: state.storeId,
+          branchId: state.branchId,
+          businessDayId: state.businessDayId,
+          userId: state.userId
+        })
+      );
+    }
   );
 };
 

@@ -26,7 +26,13 @@ import type {
   InventoryMovementListRequest,
   InventoryOverviewContract,
   InventoryOpeningStockContract,
+  InventoryStockTakeCompleteContract,
+  InventoryStockTakeGetContract,
+  InventoryStockTakeStartContract,
+  InventoryStockTakesContract,
   OpeningStockBulkPayload,
+  StockTakeCompletePayload,
+  StockTakeStartPayload,
   ProductArchiveContract,
   ProductCatalogArchiveContract,
   ProductCatalogGetContract,
@@ -348,7 +354,25 @@ const inventoryApi = {
   openingStock: (
     payload: OpeningStockBulkPayload
   ): Promise<InventoryOpeningStockContract["response"]> =>
-    request<InventoryOpeningStockContract["response"]>("orix:inventory.opening-stock", payload)
+    request<InventoryOpeningStockContract["response"]>("orix:inventory.opening-stock", payload),
+  stockTakes: (): Promise<InventoryStockTakesContract["response"]> =>
+    request<InventoryStockTakesContract["response"]>("orix:inventory.stock-takes", {}),
+  getStockTake: (id: string): Promise<InventoryStockTakeGetContract["response"]> =>
+    request<InventoryStockTakeGetContract["response"]>("orix:inventory.stock-take.get", { id }),
+  startStockTake: (
+    payload: StockTakeStartPayload
+  ): Promise<InventoryStockTakeStartContract["response"]> =>
+    request<InventoryStockTakeStartContract["response"]>(
+      "orix:inventory.stock-take.start",
+      payload
+    ),
+  completeStockTake: (
+    payload: StockTakeCompletePayload
+  ): Promise<InventoryStockTakeCompleteContract["response"]> =>
+    request<InventoryStockTakeCompleteContract["response"]>(
+      "orix:inventory.stock-take.complete",
+      payload
+    )
 };
 
 contextBridge.exposeInMainWorld("orix", {

@@ -12,6 +12,8 @@ import { customerPayments } from "./customer-payments.js";
 import { customers } from "./customers.js";
 import { expenseCategories } from "./expense-categories.js";
 import { expenses } from "./expenses.js";
+import { inventoryCountItems } from "./inventory-count-items.js";
+import { inventoryCounts } from "./inventory-counts.js";
 import { inventoryTransactions } from "./inventory-transactions.js";
 import { ledgerAccounts } from "./ledger-accounts.js";
 import { ledgerEntries } from "./ledger-entries.js";
@@ -46,6 +48,7 @@ export const storesRelations = relations(stores, ({ many }) => ({
   suppliers: many(suppliers),
   salesReturns: many(salesReturns),
   purchaseReturns: many(purchaseReturns),
+  inventoryCounts: many(inventoryCounts),
   settings: many(settings),
   backups: many(backups)
 }));
@@ -57,7 +60,8 @@ export const branchesRelations = relations(branches, ({ one, many }) => ({
   sales: many(sales),
   purchases: many(purchases),
   salesReturns: many(salesReturns),
-  purchaseReturns: many(purchaseReturns)
+  purchaseReturns: many(purchaseReturns),
+  inventoryCounts: many(inventoryCounts)
 }));
 
 export const usersRelations = relations(users, ({ one, many }) => ({
@@ -113,6 +117,7 @@ export const productsRelations = relations(products, ({ one, many }) => ({
   purchaseItems: many(purchaseItems),
   salesReturnItems: many(salesReturnItems),
   purchaseReturnItems: many(purchaseReturnItems),
+  inventoryCountItems: many(inventoryCountItems),
   inventoryTransactions: many(inventoryTransactions)
 }));
 
@@ -137,6 +142,7 @@ export const businessDaysRelations = relations(businessDays, ({ one, many }) => 
   purchases: many(purchases),
   salesReturns: many(salesReturns),
   purchaseReturns: many(purchaseReturns),
+  inventoryCounts: many(inventoryCounts),
   cashSessions: many(cashSessions)
 }));
 
@@ -317,6 +323,39 @@ export const inventoryTransactionsRelations = relations(inventoryTransactions, (
   product: one(products, {
     fields: [inventoryTransactions.productId],
     references: [products.id]
+  })
+}));
+
+export const inventoryCountsRelations = relations(inventoryCounts, ({ one, many }) => ({
+  store: one(stores, { fields: [inventoryCounts.storeId], references: [stores.id] }),
+  branch: one(branches, { fields: [inventoryCounts.branchId], references: [branches.id] }),
+  businessDay: one(businessDays, {
+    fields: [inventoryCounts.businessDayId],
+    references: [businessDays.id]
+  }),
+  createdBy: one(users, {
+    fields: [inventoryCounts.createdByUserId],
+    references: [users.id]
+  }),
+  completedBy: one(users, {
+    fields: [inventoryCounts.completedByUserId],
+    references: [users.id]
+  }),
+  items: many(inventoryCountItems)
+}));
+
+export const inventoryCountItemsRelations = relations(inventoryCountItems, ({ one }) => ({
+  inventoryCount: one(inventoryCounts, {
+    fields: [inventoryCountItems.inventoryCountId],
+    references: [inventoryCounts.id]
+  }),
+  product: one(products, {
+    fields: [inventoryCountItems.productId],
+    references: [products.id]
+  }),
+  adjustmentTransaction: one(inventoryTransactions, {
+    fields: [inventoryCountItems.adjustmentInventoryTransactionId],
+    references: [inventoryTransactions.id]
   })
 }));
 

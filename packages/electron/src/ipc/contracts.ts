@@ -1273,6 +1273,55 @@ export type OpeningStockBulkPayload = {
   readonly entries: readonly OpeningStockEntryPayload[];
 };
 
+export type StockTakeScope = "full" | "partial";
+export type StockTakeStatus = "draft" | "completed" | "cancelled";
+
+export type StockTakeListItemDto = {
+  readonly id: string;
+  readonly countNumber: string;
+  readonly scopeType: StockTakeScope;
+  readonly status: StockTakeStatus;
+  readonly startedAt: string;
+  readonly completedAt: string | null;
+  readonly itemCount: number;
+  readonly varianceCount: number;
+  readonly notes: string | null;
+};
+
+export type StockTakeItemDto = {
+  readonly id: string;
+  readonly productId: string;
+  readonly productName: string;
+  readonly barcode: string | null;
+  readonly sku: string | null;
+  readonly expectedQuantity: number;
+  readonly countedQuantity: number | null;
+  readonly varianceQuantity: number | null;
+  readonly adjustmentInventoryTransactionId: string | null;
+};
+
+export type StockTakeDetailDto = StockTakeListItemDto & {
+  readonly items: readonly StockTakeItemDto[];
+  readonly createdByUserId: string;
+  readonly completedByUserId: string | null;
+};
+
+export type StockTakeStartPayload = {
+  readonly scopeType: StockTakeScope;
+  readonly productIds: readonly string[];
+  readonly startedAt: string;
+  readonly notes?: string | null;
+};
+
+export type StockTakeCompletePayload = {
+  readonly countId: string;
+  readonly completedAt: string;
+  readonly counts: readonly {
+    readonly productId: string;
+    readonly countedQuantity: number;
+  }[];
+};
+
 export type InventoryIpcError = {
   readonly code: string;
   readonly message: string;
@@ -1531,6 +1580,34 @@ export type InventoryOpeningStockContract = IpcContract<
   InventoryIpcError
 >;
 
+export type InventoryStockTakesContract = IpcContract<
+  "orix:inventory.stock-takes",
+  Record<string, never>,
+  { readonly items: readonly StockTakeListItemDto[] },
+  InventoryIpcError
+>;
+
+export type InventoryStockTakeGetContract = IpcContract<
+  "orix:inventory.stock-take.get",
+  { readonly id: string },
+  StockTakeDetailDto | undefined,
+  InventoryIpcError
+>;
+
+export type InventoryStockTakeStartContract = IpcContract<
+  "orix:inventory.stock-take.start",
+  StockTakeStartPayload,
+  { readonly stockTake: StockTakeDetailDto },
+  InventoryIpcError
+>;
+
+export type InventoryStockTakeCompleteContract = IpcContract<
+  "orix:inventory.stock-take.complete",
+  StockTakeCompletePayload,
+  { readonly stockTake: StockTakeDetailDto },
+  InventoryIpcError
+>;
+
 export type CustomerListContract = IpcContract<
   "orix:customers.list",
   CustomerListRequest,
@@ -1785,6 +1862,10 @@ export type OrixIpcContract =
   | InventoryMovementsContract
   | InventoryAdjustContract
   | InventoryOpeningStockContract
+  | InventoryStockTakesContract
+  | InventoryStockTakeGetContract
+  | InventoryStockTakeStartContract
+  | InventoryStockTakeCompleteContract
   | CustomerListContract
   | CustomerGetContract
   | CustomerSaveContract

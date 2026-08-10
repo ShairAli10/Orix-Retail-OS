@@ -11,6 +11,8 @@ export * from "./customer-payments.js";
 export * from "./customers.js";
 export * from "./expense-categories.js";
 export * from "./expenses.js";
+export * from "./inventory-count-items.js";
+export * from "./inventory-counts.js";
 export * from "./inventory-transactions.js";
 export * from "./ledger-accounts.js";
 export * from "./ledger-entries.js";

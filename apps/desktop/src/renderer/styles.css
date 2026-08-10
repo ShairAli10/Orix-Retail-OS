@@ -1834,6 +1834,98 @@ tbody tr:hover {
   background: var(--surface-2);
 }
 
+.stock-take-panel {
+  min-height: 460px;
+}
+
+.stock-take-layout {
+  display: grid;
+  grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.stock-take-list {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.stock-take-list button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px;
+  text-align: left;
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.stock-take-list button span {
+  font-weight: 800;
+}
+
+.stock-take-list button small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.stock-take-list .active-count {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+}
+
+.stock-take-empty {
+  min-height: 260px;
+}
+
+.stock-take-entry {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.stock-take-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.stock-take-entry .table-wrap {
+  max-height: 460px;
+}
+
+.stock-take-entry td,
+.stock-take-entry th {
+  padding: 10px 12px;
+}
+
+.compact-number {
+  width: 96px;
+  min-height: 34px;
+  padding: 6px 8px;
+  text-align: right;
+}
+
+.stock-take-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.success-text {
+  color: #047857;
+  font-weight: 800;
+}
+
 .muted-text {
   color: var(--muted);
   margin: 0;
@@ -2665,6 +2757,20 @@ tbody tr:hover {
 
   .inventory-filters,
   .opening-row {
+    grid-template-columns: 1fr;
+  }
+
+  .stock-take-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .stock-take-list {
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(190px, 1fr);
+    overflow-x: auto;
+  }
+
+  .stock-take-summary {
     grid-template-columns: 1fr;
   }
 

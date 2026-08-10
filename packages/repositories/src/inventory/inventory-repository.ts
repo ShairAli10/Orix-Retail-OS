@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { inventoryTransactions } from "@orix/database";
 import type { CoreResult } from "@orix/core";
 import { err, ok } from "@orix/core";
@@ -117,6 +118,70 @@ export type InventoryTransactionWrite = {
   readonly postedAt: string;
   readonly userId: string;
 };
+
+export type StockTakeScope = "full" | "partial";
+export type StockTakeStatus = "draft" | "completed" | "cancelled";
+
+export type StockTakeStartWrite = {
+  readonly storeId: string;
+  readonly branchId: string;
+  readonly businessDayId: string;
+  readonly userId: string;
+  readonly scopeType: StockTakeScope;
+  readonly productIds: readonly string[];
+  readonly startedAt: string;
+  readonly notes?: string | null;
+};
+
+export type StockTakeCountWrite = {
+  readonly productId: string;
+  readonly countedQuantity: number;
+};
+
+export type StockTakeCompleteWrite = {
+  readonly countId: string;
+  readonly storeId: string;
+  readonly branchId: string;
+  readonly businessDayId: string;
+  readonly userId: string;
+  readonly completedAt: string;
+  readonly counts: readonly StockTakeCountWrite[];
+};
+
+export type StockTakeListItem = {
+  readonly id: string;
+  readonly countNumber: string;
+  readonly scopeType: StockTakeScope;
+  readonly status: StockTakeStatus;
+  readonly startedAt: string;
+  readonly completedAt: string | null;
+  readonly itemCount: number;
+  readonly varianceCount: number;
+  readonly notes: string | null;
+};
+
+export type StockTakeItem = {
+  readonly id: string;
+  readonly productId: string;
+  readonly productName: string;
+  readonly barcode: string | null;
+  readonly sku: string | null;
+  readonly expectedQuantity: number;
+  readonly countedQuantity: number | null;
+  readonly varianceQuantity: number | null;
+  readonly adjustmentInventoryTransactionId: string | null;
+};
+
+export type StockTakeDetail = StockTakeListItem & {
+  readonly items: readonly StockTakeItem[];
+  readonly createdByUserId: string;
+  readonly completedByUserId: string | null;
+};
+
+type IdRow = { readonly id: string };
+type CountRow = { readonly count: number };
+type StockTakeRow = Omit<StockTakeDetail, "items">;
+type StockTakeItemRow = StockTakeItem;
 
 const asString = (value: unknown): string => {
   if (typeof value === "string") return value;
@@ -332,6 +397,216 @@ export class InventoryRepository extends BaseRepository<typeof inventoryTransact
     }
   }
 
+  public listStockTakes(storeId: string): CoreResult<readonly StockTakeListItem[]> {
+    try {
+      const rows = this.connection.sqlite
+        .prepare(
+          `SELECT ic.id, ic.count_number AS countNumber, ic.scope_type AS scopeType,
+                  ic.status, ic.started_at AS startedAt, ic.completed_at AS completedAt,
+                  ic.notes, COUNT(ici.id) AS itemCount,
+                  COALESCE(SUM(CASE WHEN COALESCE(ici.variance_quantity, 0) != 0 THEN 1 ELSE 0 END), 0) AS varianceCount
+             FROM inventory_counts ic
+             LEFT JOIN inventory_count_items ici ON ici.inventory_count_id = ic.id
+            WHERE ic.store_id = ?
+            GROUP BY ic.id
+            ORDER BY ic.started_at DESC
+            LIMIT 12`
+        )
+        .all(storeId) as StockTakeListItem[];
+      return ok(rows);
+    } catch (cause) {
+      return err(repositoryError("REPOSITORY_READ_FAILED", "Failed to list stock takes", cause));
+    }
+  }
+
+  public getStockTake(id: string): CoreResult<StockTakeDetail | undefined> {
+    try {
+      const row = this.connection.sqlite
+        .prepare(
+          `SELECT ic.id, ic.count_number AS countNumber, ic.scope_type AS scopeType,
+                  ic.status, ic.started_at AS startedAt, ic.completed_at AS completedAt,
+                  ic.notes, ic.created_by_user_id AS createdByUserId,
+                  ic.completed_by_user_id AS completedByUserId,
+                  COUNT(ici.id) AS itemCount,
+                  COALESCE(SUM(CASE WHEN COALESCE(ici.variance_quantity, 0) != 0 THEN 1 ELSE 0 END), 0) AS varianceCount
+             FROM inventory_counts ic
+             LEFT JOIN inventory_count_items ici ON ici.inventory_count_id = ic.id
+            WHERE ic.id = ?
+            GROUP BY ic.id
+            LIMIT 1`
+        )
+        .get(id) as StockTakeRow | undefined;
+      if (row === undefined) return ok(undefined);
+      const items = this.connection.sqlite
+        .prepare(
+          `SELECT ici.id, ici.product_id AS productId, p.name AS productName,
+                  p.barcode, p.sku, ici.expected_quantity AS expectedQuantity,
+                  ici.counted_quantity AS countedQuantity,
+                  ici.variance_quantity AS varianceQuantity,
+                  ici.adjustment_inventory_transaction_id AS adjustmentInventoryTransactionId
+             FROM inventory_count_items ici
+             JOIN products p ON p.id = ici.product_id
+            WHERE ici.inventory_count_id = ?
+            ORDER BY p.name ASC`
+        )
+        .all(id) as StockTakeItemRow[];
+      return ok({ ...row, items });
+    } catch (cause) {
+      return err(repositoryError("REPOSITORY_READ_FAILED", "Failed to load stock take", cause));
+    }
+  }
+
+  public startStockTake(input: StockTakeStartWrite): CoreResult<StockTakeDetail> {
+    try {
+      const existingDraft = this.connection.sqlite
+        .prepare("SELECT id FROM inventory_counts WHERE branch_id = ? AND status = 'draft' LIMIT 1")
+        .get(input.branchId) as IdRow | undefined;
+      if (existingDraft !== undefined) {
+        return err(
+          repositoryError("REPOSITORY_CONFLICT", "Complete the existing stock take first")
+        );
+      }
+      const products = this.stockTakeProducts(input.storeId, input.productIds);
+      if (products.length === 0) {
+        return err(repositoryError("REPOSITORY_CONFLICT", "No stock-tracked products found"));
+      }
+      const countId = randomUUID();
+      const countNumber = this.nextStockTakeNumber(input.branchId);
+      this.connection.sqlite
+        .prepare(
+          `INSERT INTO inventory_counts (
+            id, store_id, branch_id, business_day_id, count_number, scope_type, status,
+            started_at, notes, created_at, updated_at, created_by_user_id
+          ) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)`
+        )
+        .run(
+          countId,
+          input.storeId,
+          input.branchId,
+          input.businessDayId,
+          countNumber,
+          input.scopeType,
+          input.startedAt,
+          input.notes ?? null,
+          input.startedAt,
+          input.startedAt,
+          input.userId
+        );
+      for (const product of products) {
+        this.connection.sqlite
+          .prepare(
+            `INSERT INTO inventory_count_items (
+              id, inventory_count_id, product_id, expected_quantity, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)`
+          )
+          .run(
+            randomUUID(),
+            countId,
+            product.productId,
+            product.currentStock,
+            input.startedAt,
+            input.startedAt
+          );
+      }
+      this.writeAudit(input, "InventoryCountStarted", countId, {
+        countNumber,
+        scopeType: input.scopeType,
+        itemCount: products.length
+      });
+      const created = this.getStockTake(countId);
+      return created.ok && created.value !== undefined
+        ? ok(created.value)
+        : err(repositoryError("REPOSITORY_READ_FAILED", "Failed to load stock take"));
+    } catch (cause) {
+      return err(repositoryError("REPOSITORY_WRITE_FAILED", "Failed to start stock take", cause));
+    }
+  }
+
+  public completeStockTake(input: StockTakeCompleteWrite): CoreResult<StockTakeDetail> {
+    try {
+      const existing = this.getStockTake(input.countId);
+      if (!existing.ok) return existing;
+      if (existing.value === undefined) {
+        return err(repositoryError("REPOSITORY_NOT_FOUND", "Stock take was not found"));
+      }
+      if (existing.value.status !== "draft") {
+        return err(repositoryError("REPOSITORY_CONFLICT", "Only draft stock takes can be posted"));
+      }
+      const countsByProduct = new Map(input.counts.map((count) => [count.productId, count]));
+      if (countsByProduct.size !== existing.value.items.length) {
+        return err(repositoryError("REPOSITORY_CONFLICT", "Count every item before posting"));
+      }
+      let varianceCount = 0;
+      for (const item of existing.value.items) {
+        const count = countsByProduct.get(item.productId);
+        if (count === undefined || count.countedQuantity < 0) {
+          return err(repositoryError("REPOSITORY_CONFLICT", "Counted quantity is invalid"));
+        }
+        const variance = count.countedQuantity - item.expectedQuantity;
+        let transactionId: string | null = null;
+        if (variance !== 0) {
+          varianceCount += 1;
+          transactionId = randomUUID();
+          const created = this.createTransaction({
+            id: transactionId,
+            storeId: input.storeId,
+            branchId: input.branchId,
+            businessDayId: input.businessDayId,
+            productId: item.productId,
+            sourceType: "inventory-count",
+            sourceId: input.countId,
+            movementType: "stock-count-difference",
+            direction: variance > 0 ? "in" : "out",
+            quantity: Math.abs(variance),
+            unitCostMinor: null,
+            reason: "stock-count-difference",
+            notes: `Stock take ${existing.value.countNumber}`,
+            postedAt: input.completedAt,
+            userId: input.userId
+          });
+          if (!created.ok) return created;
+        }
+        this.connection.sqlite
+          .prepare(
+            `UPDATE inventory_count_items
+                SET counted_quantity = ?, variance_quantity = ?,
+                    adjustment_inventory_transaction_id = ?, updated_at = ?,
+                    counted_by_user_id = ?, approved_by_user_id = ?
+              WHERE id = ?`
+          )
+          .run(
+            count.countedQuantity,
+            variance,
+            transactionId,
+            input.completedAt,
+            input.userId,
+            input.userId,
+            item.id
+          );
+      }
+      this.connection.sqlite
+        .prepare(
+          `UPDATE inventory_counts
+              SET status = 'completed', completed_at = ?, updated_at = ?,
+                  completed_by_user_id = ?, approved_by_user_id = ?
+            WHERE id = ?`
+        )
+        .run(input.completedAt, input.completedAt, input.userId, input.userId, input.countId);
+      this.writeAudit(input, "InventoryCountCompleted", input.countId, {
+        countNumber: existing.value.countNumber,
+        varianceCount
+      });
+      const completed = this.getStockTake(input.countId);
+      return completed.ok && completed.value !== undefined
+        ? ok(completed.value)
+        : err(repositoryError("REPOSITORY_READ_FAILED", "Failed to load completed stock take"));
+    } catch (cause) {
+      return err(
+        repositoryError("REPOSITORY_WRITE_FAILED", "Failed to complete stock take", cause)
+      );
+    }
+  }
+
   private inventoryBaseSql(): string {
     return `SELECT p.id AS productId, p.barcode, p.sku, p.name AS productName,
                    c.name AS categoryName, NULL AS supplierName,
@@ -497,5 +772,70 @@ export class InventoryRepository extends BaseRepository<typeof inventoryTransact
           ? null
           : asNumber(record.unitCostMinor)
     };
+  }
+
+  private stockTakeProducts(
+    storeId: string,
+    productIds: readonly string[]
+  ): readonly { readonly productId: string; readonly currentStock: number }[] {
+    const params: string[] = [storeId];
+    const productFilter =
+      productIds.length > 0 ? `AND p.id IN (${productIds.map(() => "?").join(", ")})` : "";
+    params.push(...productIds);
+    return this.connection.sqlite
+      .prepare(
+        `SELECT p.id AS productId, COALESCE(stock.currentStock, 0) AS currentStock
+           FROM products p
+           LEFT JOIN (
+             SELECT product_id,
+                    SUM(CASE WHEN direction = 'in' THEN quantity ELSE -quantity END) AS currentStock
+               FROM inventory_transactions
+              WHERE status = 'posted'
+              GROUP BY product_id
+           ) stock ON stock.product_id = p.id
+          WHERE p.store_id = ? AND p.archived_at IS NULL AND p.is_stock_tracked = 1 ${productFilter}
+          ORDER BY p.name ASC`
+      )
+      .all(...params) as readonly { readonly productId: string; readonly currentStock: number }[];
+  }
+
+  private nextStockTakeNumber(branchId: string): string {
+    const row = this.connection.sqlite
+      .prepare("SELECT COUNT(*) AS count FROM inventory_counts WHERE branch_id = ?")
+      .get(branchId) as CountRow;
+    return `ST-${String(row.count + 1).padStart(6, "0")}`;
+  }
+
+  private writeAudit(
+    input: {
+      readonly storeId: string;
+      readonly branchId: string;
+      readonly businessDayId: string;
+      readonly userId: string;
+    },
+    action: string,
+    targetId: string,
+    metadata: Readonly<Record<string, unknown>>
+  ): void {
+    const timestamp = new Date().toISOString();
+    this.connection.sqlite
+      .prepare(
+        `INSERT INTO audit_logs (
+          id, store_id, branch_id, business_day_id, actor_user_id, action,
+          target_type, target_id, metadata_json, occurred_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'inventory-count', ?, ?, ?, ?)`
+      )
+      .run(
+        randomUUID(),
+        input.storeId,
+        input.branchId,
+        input.businessDayId,
+        input.userId,
+        action,
+        targetId,
+        JSON.stringify(metadata),
+        timestamp,
+        timestamp
+      );
   }
 }

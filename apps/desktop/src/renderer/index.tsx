@@ -23,6 +23,10 @@ import type {
   InventoryMovementDto,
   InventoryMovementListRequest,
   InventoryOverviewDto,
+  StockTakeCompletePayload,
+  StockTakeDetailDto,
+  StockTakeListItemDto,
+  StockTakeStartPayload,
   MigrationIssueDto,
   OpeningStockEntryPayload,
   LegacyStockImportPreviewDto,
@@ -200,6 +204,11 @@ type OpeningStockForm = {
   readonly unitCost: string;
   readonly occurredAt: string;
   readonly notes: string;
+};
+
+type StockTakeFormState = {
+  readonly detail: StockTakeDetailDto;
+  readonly counts: Readonly<Record<string, string>>;
 };
 
 type CustomerFormState = {
@@ -6454,6 +6463,7 @@ const InventoryModule = ({
   const [overview, setOverview] = useState<InventoryOverviewDto | null>(null);
   const [items, setItems] = useState<readonly InventoryItemDto[]>([]);
   const [movements, setMovements] = useState<readonly InventoryMovementDto[]>([]);
+  const [stockTakes, setStockTakes] = useState<readonly StockTakeListItemDto[]>([]);
   const [products, setProducts] = useState<readonly ProductListItemDto[]>([]);
   const [query, setQuery] = useState<InventoryListRequest>({
     page: 1,
@@ -6469,13 +6479,16 @@ const InventoryModule = ({
   const [totalItems, setTotalItems] = useState(0);
   const [movementTotal, setMovementTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [activeView, setActiveView] = useState<"stock" | "movements" | "low" | "out">("stock");
+  const [activeView, setActiveView] = useState<"stock" | "movements" | "stockTake" | "low" | "out">(
+    "stock"
+  );
   const [visibleColumns, setVisibleColumns] =
     useState<readonly InventoryColumn[]>(inventoryColumns);
   const [drawerItem, setDrawerItem] = useState<InventoryItemDto | null>(null);
   const [adjustment, setAdjustment] = useState<StockAdjustmentForm | null>(null);
   const [openingStock, setOpeningStock] = useState<readonly OpeningStockForm[]>([]);
   const [csvPreview, setCsvPreview] = useState<readonly OpeningStockForm[]>([]);
+  const [stockTakeForm, setStockTakeForm] = useState<StockTakeFormState | null>(null);
 
   const totalPages = Math.max(1, Math.ceil(totalItems / query.pageSize));
   const movementPages = Math.max(1, Math.ceil(movementTotal / movementQuery.pageSize));
@@ -6488,18 +6501,20 @@ const InventoryModule = ({
         : activeView === "out"
           ? { ...query, status: "out-of-stock" as const, page: 1 }
           : query;
-    const [overviewResponse, listResponse, movementsResponse, productResponse] = await Promise.all([
-      window.orix.inventory.overview(),
-      window.orix.inventory.list(inventoryQuery),
-      window.orix.inventory.movements(movementQuery),
-      window.orix.products.list({
-        page: 1,
-        pageSize: 500,
-        sortBy: "name",
-        sortDirection: "asc",
-        status: "active"
-      })
-    ]);
+    const [overviewResponse, listResponse, movementsResponse, productResponse, stockTakesResponse] =
+      await Promise.all([
+        window.orix.inventory.overview(),
+        window.orix.inventory.list(inventoryQuery),
+        window.orix.inventory.movements(movementQuery),
+        window.orix.products.list({
+          page: 1,
+          pageSize: 500,
+          sortBy: "name",
+          sortDirection: "asc",
+          status: "active"
+        }),
+        window.orix.inventory.stockTakes()
+      ]);
     if (overviewResponse.ok) {
       setOverview(overviewResponse.value);
     } else {
@@ -6519,6 +6534,9 @@ const InventoryModule = ({
     }
     if (productResponse.ok) {
       setProducts(productResponse.value.items);
+    }
+    if (stockTakesResponse.ok) {
+      setStockTakes(stockTakesResponse.value.items);
     }
     setLoading(false);
   }, [activeView, movementQuery, query, showToast]);
@@ -6620,6 +6638,76 @@ const InventoryModule = ({
     }
   };
 
+  const startStockTake = async () => {
+    const payload: StockTakeStartPayload = {
+      scopeType: "full",
+      productIds: [],
+      startedAt: new Date().toISOString(),
+      notes: "Full store count"
+    };
+    const response = await window.orix.inventory.startStockTake(payload);
+    if (response.ok) {
+      setStockTakeForm({
+        detail: response.value.stockTake,
+        counts: Object.fromEntries(
+          response.value.stockTake.items.map((item) => [
+            item.productId,
+            String(item.expectedQuantity)
+          ])
+        )
+      });
+      setActiveView("stockTake");
+      showToast(`Stock take ${response.value.stockTake.countNumber} started.`);
+      await loadInventory();
+    } else {
+      showToast(response.error.message, "error");
+    }
+  };
+
+  const openStockTake = async (id: string) => {
+    const response = await window.orix.inventory.getStockTake(id);
+    if (!response.ok || response.value === undefined) {
+      showToast(response.ok ? "Stock take was not found." : response.error.message, "error");
+      return;
+    }
+    setStockTakeForm({
+      detail: response.value,
+      counts: Object.fromEntries(
+        response.value.items.map((item) => [
+          item.productId,
+          String(item.countedQuantity ?? item.expectedQuantity)
+        ])
+      )
+    });
+  };
+
+  const completeStockTake = async () => {
+    if (stockTakeForm === null) return;
+    const payload: StockTakeCompletePayload = {
+      countId: stockTakeForm.detail.id,
+      completedAt: new Date().toISOString(),
+      counts: stockTakeForm.detail.items.map((item) => ({
+        productId: item.productId,
+        countedQuantity: Number(stockTakeForm.counts[item.productId] ?? "0")
+      }))
+    };
+    const invalid = payload.counts.find(
+      (count) => Number.isNaN(count.countedQuantity) || count.countedQuantity < 0
+    );
+    if (invalid !== undefined) {
+      showToast("Counted quantities must be zero or higher.", "error");
+      return;
+    }
+    const response = await window.orix.inventory.completeStockTake(payload);
+    if (response.ok) {
+      setStockTakeForm(null);
+      showToast(`Stock take ${response.value.stockTake.countNumber} posted.`);
+      await loadInventory();
+    } else {
+      showToast(response.error.message, "error");
+    }
+  };
+
   const addOpeningRow = () => {
     setOpeningStock((rows) => [
       ...rows,
@@ -6672,6 +6760,7 @@ const InventoryModule = ({
           <button onClick={exportCsv}>Export CSV</button>
           <button onClick={printReport}>Print</button>
           <button onClick={addOpeningRow}>Opening Stock</button>
+          <button onClick={() => void startStockTake()}>Start Count</button>
           <button
             className="primary"
             onClick={() => {
@@ -6708,7 +6797,7 @@ const InventoryModule = ({
       </div>
 
       <div className="inventory-tabs">
-        {(["stock", "movements", "low", "out"] as const).map((view) => (
+        {(["stock", "movements", "stockTake", "low", "out"] as const).map((view) => (
           <button
             className={activeView === view ? "primary" : ""}
             key={view}
@@ -6720,9 +6809,11 @@ const InventoryModule = ({
               ? "Stock"
               : view === "movements"
                 ? "Movement History"
-                : view === "low"
-                  ? "Low Stock"
-                  : "Out Of Stock"}
+                : view === "stockTake"
+                  ? "Stock Take"
+                  : view === "low"
+                    ? "Low Stock"
+                    : "Out Of Stock"}
           </button>
         ))}
       </div>
@@ -6734,6 +6825,17 @@ const InventoryModule = ({
           query={movementQuery}
           totalPages={movementPages}
           onQuery={setMovementQuery}
+        />
+      ) : activeView === "stockTake" ? (
+        <StockTakePanel
+          stockTakes={stockTakes}
+          activeStockTake={stockTakeForm}
+          onOpen={(id) => void openStockTake(id)}
+          onChange={setStockTakeForm}
+          onComplete={() => void completeStockTake()}
+          onPrint={() => {
+            window.print();
+          }}
         />
       ) : (
         <article className="product-area">
@@ -7050,6 +7152,143 @@ const Pagination = ({
     </div>
   </div>
 );
+
+const StockTakePanel = ({
+  stockTakes,
+  activeStockTake,
+  onOpen,
+  onChange,
+  onComplete,
+  onPrint
+}: {
+  readonly stockTakes: readonly StockTakeListItemDto[];
+  readonly activeStockTake: StockTakeFormState | null;
+  readonly onOpen: (id: string) => void;
+  readonly onChange: (form: StockTakeFormState) => void;
+  readonly onComplete: () => void;
+  readonly onPrint: () => void;
+}) => {
+  const varianceRows =
+    activeStockTake?.detail.items.map((item) => {
+      const countedQuantity = Number(activeStockTake.counts[item.productId] ?? "0");
+      return {
+        item,
+        countedQuantity,
+        varianceQuantity: countedQuantity - item.expectedQuantity
+      };
+    }) ?? [];
+  const varianceCount = varianceRows.filter((row) => row.varianceQuantity !== 0).length;
+  return (
+    <article className="product-area stock-take-panel">
+      <div className="section-title">
+        <div>
+          <h3>Stock Take</h3>
+          <span className="muted-text">Count shelf stock, review differences, then post.</span>
+        </div>
+        <button onClick={onPrint}>Print Count Sheet</button>
+      </div>
+      <div className="stock-take-layout">
+        <aside className="stock-take-list">
+          <strong>Recent Counts</strong>
+          {stockTakes.length === 0 ? (
+            <span className="muted-text">No stock counts yet.</span>
+          ) : (
+            stockTakes.map((count) => (
+              <button
+                className={activeStockTake?.detail.id === count.id ? "active-count" : ""}
+                key={count.id}
+                onClick={() => {
+                  onOpen(count.id);
+                }}
+              >
+                <span>{count.countNumber}</span>
+                <small>
+                  {count.status} · {count.itemCount} items · {count.varianceCount} variances
+                </small>
+              </button>
+            ))
+          )}
+        </aside>
+        {activeStockTake === null ? (
+          <div className="state-cell stock-take-empty">
+            Start a count from the top right to capture the current system stock snapshot.
+          </div>
+        ) : (
+          <section className="stock-take-entry">
+            <div className="stock-take-summary">
+              <Metric label="Count Number" value={activeStockTake.detail.countNumber} />
+              <Metric label="Items" value={String(activeStockTake.detail.itemCount)} />
+              <Metric label="Variances" value={String(varianceCount)} />
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Barcode</th>
+                    <th>System</th>
+                    <th>Counted</th>
+                    <th>Difference</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeStockTake.detail.items.map((item) => {
+                    const counted = activeStockTake.counts[item.productId] ?? "0";
+                    const variance = Number(counted || "0") - item.expectedQuantity;
+                    return (
+                      <tr key={item.id}>
+                        <td className="strong">{item.productName}</td>
+                        <td>{item.barcode ?? item.sku ?? "-"}</td>
+                        <td>{item.expectedQuantity}</td>
+                        <td>
+                          <input
+                            className="compact-number"
+                            min={0}
+                            type="number"
+                            value={counted}
+                            disabled={activeStockTake.detail.status !== "draft"}
+                            onChange={(event) => {
+                              onChange({
+                                ...activeStockTake,
+                                counts: {
+                                  ...activeStockTake.counts,
+                                  [item.productId]: event.target.value
+                                }
+                              });
+                            }}
+                          />
+                        </td>
+                        <td
+                          className={
+                            variance < 0 ? "money-danger" : variance > 0 ? "success-text" : ""
+                          }
+                        >
+                          {variance > 0 ? `+${String(variance)}` : variance}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <footer className="stock-take-actions">
+              <span className="muted-text">
+                Posting creates inventory transactions only for differences.
+              </span>
+              <button
+                className="primary"
+                disabled={activeStockTake.detail.status !== "draft"}
+                onClick={onComplete}
+              >
+                Post Variances
+              </button>
+            </footer>
+          </section>
+        )}
+      </div>
+    </article>
+  );
+};
 
 const MovementHistory = ({
   movements,
