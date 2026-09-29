@@ -29,6 +29,13 @@
       "when": 1790150400000,
       "tag": "0003_checkout_operations",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790640000000,
+      "tag": "0004_repeat_events_payment_retries",
+      "breakpoints": true
     }
   ]
 }

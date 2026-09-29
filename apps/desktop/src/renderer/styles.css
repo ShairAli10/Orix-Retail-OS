@@ -2985,7 +2985,7 @@ tbody tr:hover {
   min-height: 60px;
 }
 
-@media (min-width: 900px) and (max-width: 1180px) {
+@media (min-width: 760px) and (max-width: 1180px) {
   .pos-module {
     grid-template-columns: minmax(0, 1fr) 300px;
     grid-template-rows: minmax(0, 1fr) auto;
@@ -3032,7 +3032,7 @@ tbody tr:hover {
 .pos-actions > .pos-change-row {
   grid-column: 1 / -1;
 }
-@media (min-width: 900px) and (max-width: 1180px) {
+@media (min-width: 760px) and (max-width: 1180px) {
   .title-bar {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 4px 12px;
@@ -3798,4 +3798,61 @@ tbody tr:hover {
   .purchase-modal .purchase-line {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+@media (min-width: 760px) and (max-width: 1000px) {
+  .pos-module .cart-line {
+    grid-template-columns: minmax(0, 1fr) auto 30px;
+  }
+  .pos-module .cart-line-head {
+    display: none;
+  }
+  .pos-module .cart-line > :first-child {
+    grid-column: 1 / -1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+.supplier-balance-summary {
+  padding: 18px;
+  margin-block: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+}
+.supplier-balance-summary > strong {
+  font-size: 28px;
+  font-variant-numeric: tabular-nums;
+}
+.supplier-balance-summary p {
+  margin: 0;
+  color: var(--muted);
+}
+.supplier-balance-summary .pill {
+  justify-self: start;
+}
+.supplier-extra-details {
+  margin-top: 20px;
+}
+.supplier-extra-details summary {
+  cursor: pointer;
+  padding-block: 12px;
+  font-weight: 600;
+}
+.supplier-extra-details p {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.customer-transactions-table {
+  min-width: 0;
+  width: 100%;
+}
+.customer-transactions-table td:nth-child(n + 3) {
+  white-space: nowrap;
+}
+.customer-transactions-table td:nth-child(2) {
+  overflow-wrap: anywhere;
 }

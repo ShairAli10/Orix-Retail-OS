@@ -1,4 +1,5 @@
-import { _electron as electron, expect, test } from "@playwright/test";
+import { _electron as electron } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import { resolve } from "node:path";
 test("Sales return validates quantity and posts a refund in the isolated store", async () => {
   test.skip(!process.env.ORIX_DEMO_DIRECTORY, "Use isolated demo runner");

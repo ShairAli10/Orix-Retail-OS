@@ -1,6 +1,6 @@
 # Windows diagnostics and manual updates
 
-The desktop version is now `0.1.0-rc.1`. This is a release candidate, not a production certification. Windows installer, actual printer/scanner, dependency maintenance, and remaining financial/recovery acceptance gates still apply.
+The desktop version is now `0.1.0-rc.2`. This is a release candidate, not a production certification. Windows installer, actual printer/scanner, dependency maintenance, and remaining financial/recovery acceptance gates still apply.
 
 ## Store support workflow
 
@@ -25,7 +25,7 @@ A clean shutdown after a detected crash still preserves a recovery notice for th
 
 The manifest and each log record identify the build. The fingerprint hashes shipped main-process bundles, diagnostics bootstrap, preload and renderer assets. Keep the exact installer, bundled JavaScript, and source maps for every distributed release. A commit ID alone is insufficient for an uncommitted/local build.
 
-The Windows CI workflow retains unpacked build output and symbols as an artifact for 90 days. Archive actual distributed installers and matching symbols in long-term release storage. CI configuration is not evidence that the Windows workflow has run.
+The Windows CI workflow builds the NSIS installer and retains two separate artifacts for 90 days: `windows-installer-<commit>` (installer, SHA-256 checksum and build record), and `windows-support-and-symbols-<commit>` (unpacked app, bundles/maps, migration files and lockfile). The build record identifies the workflow run and explicitly marks this unsigned candidate as not yet accepted on the target machine. Archive actual distributed installers and matching symbols in long-term release storage. CI configuration is not evidence that the Windows workflow has run.
 
 ## Manual update procedure
 
@@ -46,3 +46,15 @@ On macOS arm64, `pnpm check` passed lint, type checking, build, and 69 tests acr
 `pnpm test:e2e` passed three Electron journeys: counter checkout and basket recovery with diagnostics export success/cancellation/write failure; forced process termination followed by the recovery notice; and an actual forced renderer crash recorded before application exit. Python's independent ZIP reader verified the exported archive's CRCs and manifest. Test exports and screenshots are under ignored `test-results/`.
 
 These checks do not establish Windows installer compatibility, native dump creation on Windows, physical power-loss durability, peripheral compatibility, or production readiness of all financial workflows. The scoped Support UI uses the existing design system; the broader static UI audit still identifies legacy form/control issues outside this change. Resolve the remaining gates in the single-counter handoff before live trading.
+
+## Release candidate correctness update — 2026-09-29
+
+Migration `0004_repeat_events_payment_retries` preserves existing events and replaces the entity/event uniqueness constraint with a normal lookup index, allowing repeated edits and archive/restore cycles. Event IDs remain unique. It adds a payment-request table so customer and supplier payments with the same request ID return the original result; changed request details are rejected. Request storage, payment, ledger and event writes share the service transaction.
+
+Payment forms now display local wall-clock time and submit an ISO timestamp. Existing historical timestamps are not rewritten. The form retains its request ID during an interrupted-response retry, but closing/reloading the form creates a new request: check the account before re-entering payment details after such an interruption. Requests from older clients without a request ID do not gain retry protection.
+
+This schema upgrade follows the existing pre-migration snapshot procedure. Older backups still require their matching application/schema; the in-app restore verifier does not migrate an old backup automatically. Preserve migration files and the pre-upgrade snapshot.
+
+## Current installation checklist
+
+Use [the Windows rollout checklist](windows-rollout-checklist.md) for clean installation, updates, recovery testing and store-owner signoff. The latest local evidence is in [single-counter acceptance](single-counter-acceptance-2026-09-29.md).

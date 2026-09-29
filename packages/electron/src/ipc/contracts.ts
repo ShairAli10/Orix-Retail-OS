@@ -652,6 +652,7 @@ export type CustomerStatementDto = {
 };
 
 export type CustomerPaymentPayload = {
+  readonly operationId?: string;
   readonly customerId: string;
   readonly amountMinor: number;
   readonly paymentMethod: "cash" | "bank" | "jazzcash" | "easypaisa" | "card";
@@ -795,6 +796,7 @@ export type SupplierStatementDto = {
 };
 
 export type SupplierPaymentPayload = {
+  readonly operationId?: string;
   readonly supplierId: string;
   readonly amountMinor: number;
   readonly paymentMethod: "cash" | "bank" | "jazzcash" | "easypaisa" | "card";

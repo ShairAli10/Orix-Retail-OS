@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CounterSummaryDto } from "@orix/electron";
 
 const money = (minor: number) =>
   new Intl.NumberFormat("en-PK", { style: "currency", currency: "PKR" }).format(minor / 100);
+const varianceLabel = (value: number) =>
+  value < 0 ? "Cash shortage" : value > 0 ? "Extra cash" : "Cash matches";
 const minor = (value: string) => Math.round(Number(value) * 100);
 export const CounterPage = ({
   canExpense,
@@ -18,23 +20,36 @@ export const CounterPage = ({
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
   const [operationId, setOperationId] = useState(() => crypto.randomUUID());
+  const inFlight = useRef(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const load = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError("");
     try {
       const result = await window.orix.counter.summary();
       if (result.ok) setSummary(result.value);
-      else setError(result.error.message);
+      else {
+        setSummary(null);
+        setError(result.error.message);
+      }
     } catch {
+      setSummary(null);
       setError("Counter could not be loaded. Try refreshing.");
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
     }
   }, []);
   useEffect(() => {
     void load();
   }, [load]);
   const run = async (action: "open" | "close" | "expense") => {
-    if (busy) return;
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setError("");
     setMessage("");
@@ -73,10 +88,15 @@ export const CounterPage = ({
         "The response was interrupted. Refresh before closing again; expense retries are safe."
       );
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
   const open = summary?.session?.status === "open";
+  const variance =
+    counted.trim() === "" || !Number.isFinite(Number(counted))
+      ? null
+      : minor(counted) - (summary?.expectedCashMinor ?? 0);
   return (
     <section className="counter-page">
       <header className="page-heading">
@@ -103,7 +123,9 @@ export const CounterPage = ({
         {message}
       </p>
       {summary === null ? (
-        <p role="status">Loading counter…</p>
+        <p role="status">
+          {busy ? "Loading counter…" : "Counter unavailable. Refresh to try again."}
+        </p>
       ) : (
         <>
           <div className="counter-overview card">
@@ -137,7 +159,13 @@ export const CounterPage = ({
           </div>
           <div className="counter-grid">
             <section className="card counter-panel">
-              <h2>{summary.session ? "Close the counter" : "Open the counter"}</h2>
+              <h2>
+                {open
+                  ? "Close the counter"
+                  : summary.session
+                    ? "Closing summary"
+                    : "Open the counter"}
+              </h2>
               {!summary.session ? (
                 <form
                   onSubmit={(event) => {
@@ -151,6 +179,7 @@ export const CounterPage = ({
                       type="number"
                       min="0"
                       step="0.01"
+                      disabled={busy}
                       value={opening}
                       onChange={(event) => {
                         setOpening(event.target.value);
@@ -176,6 +205,7 @@ export const CounterPage = ({
                       type="number"
                       min="0"
                       step="0.01"
+                      disabled={busy}
                       value={counted}
                       onChange={(event) => {
                         setCounted(event.target.value);
@@ -184,14 +214,17 @@ export const CounterPage = ({
                     />
                   </label>
                   <div className="counter-variance">
-                    <span>Difference</span>
+                    <span>{variance === null ? "Cash difference" : varianceLabel(variance)}</span>
                     <strong>
-                      {counted === "" ? "—" : money(minor(counted) - summary.expectedCashMinor)}
+                      {variance === null ? "Enter your cash count" : money(Math.abs(variance))}
                     </strong>
                   </div>
                   <label>
                     Difference explanation
                     <textarea
+                      disabled={busy}
+                      required={variance !== null && variance !== 0}
+                      minLength={variance !== null && variance !== 0 ? 3 : undefined}
                       value={reason}
                       onChange={(event) => {
                         setReason(event.target.value);
@@ -209,8 +242,8 @@ export const CounterPage = ({
                   <dd>{money(summary.session.openingCashMinor)}</dd>
                   <dt>Counted cash</dt>
                   <dd>{money(summary.session.countedCashMinor ?? 0)}</dd>
-                  <dt>Difference</dt>
-                  <dd>{money(summary.session.varianceMinor ?? 0)}</dd>
+                  <dt>{varianceLabel(summary.session.varianceMinor ?? 0)}</dt>
+                  <dd>{money(Math.abs(summary.session.varianceMinor ?? 0))}</dd>
                   <dt>Explanation</dt>
                   <dd>{summary.session.notes ?? "No difference recorded"}</dd>
                 </dl>
@@ -218,7 +251,11 @@ export const CounterPage = ({
             </section>
             <section className="card counter-panel">
               <h2>Record an expense</h2>
-              <p>Cash paid out for deliveries, supplies, and other store costs.</p>
+              <p>
+                {open
+                  ? "Cash paid out for deliveries, supplies, and other store costs."
+                  : "Open the counter to record cash expenses."}
+              </p>
               {canExpense ? (
                 <form
                   onSubmit={(event) => {
@@ -287,7 +324,13 @@ export const CounterPage = ({
                           })}
                         </td>
                         <td>{money(expense.amountMinor)}</td>
-                        <td>{expense.status}</td>
+                        <td>
+                          {expense.status === "posted"
+                            ? "Recorded"
+                            : expense.status === "voided"
+                              ? "Voided"
+                              : expense.status}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

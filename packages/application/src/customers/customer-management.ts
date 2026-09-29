@@ -140,6 +140,12 @@ export class CustomerManagementApplicationService {
   public async recordPayment(
     input: CustomerPaymentWrite
   ): Promise<CoreResult<CustomerPaymentOutput>> {
+    if (input.operationId !== undefined && !/^[a-zA-Z0-9-]{16,80}$/.test(input.operationId)) {
+      return err(validationError("Invalid payment request ID.", ["operationId"]));
+    }
+    if (!Number.isFinite(Date.parse(input.paidAt))) {
+      return err(validationError("Enter a valid payment date.", ["paidAt"]));
+    }
     if (input.amountMinor <= 0) {
       return err(validationError("Payment amount must be greater than zero.", ["amountMinor"]));
     }
@@ -157,9 +163,10 @@ export class CustomerManagementApplicationService {
       () => {
         const payment = this.context.repositories.customers.recordPayment(input);
         if (!payment.ok) return Promise.resolve(payment);
-        events.push(
-          this.event("CustomerPaymentReceived", input.customerId, input.storeId, input.userId)
-        );
+        events.push({
+          ...this.event("CustomerPaymentReceived", payment.value.id, input.storeId, input.userId),
+          id: `customer-payment-${payment.value.id}`
+        });
         return Promise.resolve(ok({ payment: payment.value }));
       }
     );

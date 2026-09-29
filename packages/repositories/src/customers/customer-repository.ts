@@ -125,6 +125,7 @@ export type CustomerStatement = {
 };
 
 export type CustomerPaymentWrite = {
+  readonly operationId?: string;
   readonly storeId: string;
   readonly branchId: string;
   readonly businessDayId: string;
@@ -425,6 +426,32 @@ export class CustomerRepository extends BaseRepository<typeof customers> {
 
   public recordPayment(input: CustomerPaymentWrite): CoreResult<CustomerPayment> {
     try {
+      const requestJson = JSON.stringify([
+        input.customerId,
+        input.amountMinor,
+        input.paymentMethod,
+        input.paidAt,
+        input.referenceNumber ?? null,
+        input.receiptNumber ?? null,
+        input.notes ?? null
+      ]);
+      if (input.operationId) {
+        const previous = this.connection.sqlite
+          .prepare(
+            "SELECT request_json, result_json FROM payment_operations WHERE store_id=? AND kind=? AND operation_id=?"
+          )
+          .get(input.storeId, "customer", input.operationId) as
+          { request_json: string; result_json: string } | undefined;
+        if (previous)
+          return previous.request_json === requestJson
+            ? ok(JSON.parse(previous.result_json) as CustomerPayment)
+            : err(
+                repositoryError(
+                  "REPOSITORY_CONFLICT",
+                  "This payment request was already used with different details."
+                )
+              );
+      }
       const timestamp = new Date().toISOString();
       const paymentId = randomUUID();
       const receiptNumber = input.receiptNumber?.trim();
@@ -513,7 +540,7 @@ export class CustomerRepository extends BaseRepository<typeof customers> {
         paymentId,
         amountMinor: input.amountMinor
       });
-      return ok({
+      const payment: CustomerPayment = {
         id: paymentId,
         customerId: input.customerId,
         paymentNumber,
@@ -521,7 +548,14 @@ export class CustomerRepository extends BaseRepository<typeof customers> {
         paidAt: input.paidAt,
         method: input.paymentMethod,
         notes: input.notes ?? null
-      });
+      };
+      if (input.operationId)
+        this.connection.sqlite
+          .prepare(
+            "INSERT INTO payment_operations(store_id,kind,operation_id,request_json,result_json) VALUES (?,?,?,?,?)"
+          )
+          .run(input.storeId, "customer", input.operationId, requestJson, JSON.stringify(payment));
+      return ok(payment);
     } catch (cause) {
       return err(repositoryError("REPOSITORY_WRITE_FAILED", "Failed to record payment", cause));
     }

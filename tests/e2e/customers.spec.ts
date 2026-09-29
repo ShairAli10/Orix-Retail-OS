@@ -1,4 +1,5 @@
-import { _electron as electron, expect, test } from "@playwright/test";
+import { _electron as electron } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import { resolve } from "node:path";
 test("Customer book keeps actions visible and opens accessible dialogs", async () => {
   test.skip(!process.env.ORIX_DEMO_DIRECTORY, "Use isolated demo runner");
@@ -52,10 +53,14 @@ test("Customer book keeps actions visible and opens accessible dialogs", async (
     await expect(page.getByRole("dialog")).toHaveCount(1);
     await page.keyboard.press("Escape");
     await expect(profile).toBeVisible();
-    await profile.getByRole("button", { name: "Notes", exact: true }).click();
+    await profile.getByRole("button", { name: "Details", exact: true }).click();
     await expect(profile.getByText("No notes recorded.", { exact: true })).toBeVisible();
     await profile.getByRole("button", { name: "Activity", exact: true }).click();
     await expect(profile).not.toContainText("metadata_json");
+    await profile.getByRole("button", { name: "Transactions", exact: true }).click();
+    await expect(profile.locator("thead th")).toHaveCount(5);
+    await expect(profile.locator("tbody")).not.toContainText("customer:");
+    await page.screenshot({ path: "test-results/customer-transactions-800.png" });
     await page.screenshot({ path: "test-results/customer-profile-800.png" });
     await page.keyboard.press("Escape");
     await expect(profile).toHaveCount(0);

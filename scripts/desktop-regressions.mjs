@@ -380,6 +380,93 @@ test("noncash customer and supplier payments do not change drawer cash", async (
   });
   assert.equal((await ok("cash-register.summary")).expectedCashMinor, before);
 });
+test("repeated payments have distinct events and event failure rolls back supplier payment", async () => {
+  await login();
+  for (const [party, table, event] of [
+    ["supplier", "suppliers", "SupplierPaymentRecorded"],
+    ["customer", "customers", "CustomerPaymentReceived"]
+  ]) {
+    const id = db.prepare(`SELECT id FROM ${table} LIMIT 1`).get().id;
+    const payload = {
+      [`${party}Id`]: id,
+      amountMinor: 100,
+      paymentMethod: "bank",
+      paidAt: new Date().toISOString()
+    };
+    const count = () => db.prepare(`SELECT COUNT(*) n FROM ${party}_payments`).get().n;
+    const before = count();
+    for (let i = 0; i < 2; i++) {
+      const result = await ok(`${table}.payment.record`, payload);
+      assert.equal(
+        db
+          .prepare("SELECT COUNT(*) n FROM business_events WHERE event_name=? AND source_id=?")
+          .get(event, result.payment.id).n,
+        1
+      );
+    }
+    assert.equal(count(), before + 2);
+  }
+  const beforePayments = db.prepare("SELECT COUNT(*) n FROM supplier_payments").get().n;
+  const beforeEntries = db.prepare("SELECT COUNT(*) n FROM ledger_entries").get().n;
+  db.exec(
+    "CREATE TRIGGER reject_payment_event BEFORE INSERT ON business_events BEGIN SELECT RAISE(ABORT,'injected failure'); END"
+  );
+  try {
+    const supplierId = db.prepare("SELECT id FROM suppliers LIMIT 1").get().id;
+    assert.equal(
+      (
+        await desktop.call("suppliers.payment.record", {
+          supplierId,
+          amountMinor: 100,
+          paymentMethod: "bank",
+          paidAt: new Date().toISOString()
+        })
+      ).ok,
+      false
+    );
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM supplier_payments").get().n, beforePayments);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM ledger_entries").get().n, beforeEntries);
+  } finally {
+    db.exec("DROP TRIGGER reject_payment_event");
+  }
+});
+test("payment retries reuse the original posting and reject changed amounts", async () => {
+  await login();
+  for (const party of ["customer", "supplier"]) {
+    const id = db.prepare(`SELECT id FROM ${party}s LIMIT 1`).get().id;
+    const payload = {
+      [`${party}Id`]: id,
+      operationId: crypto.randomUUID(),
+      amountMinor: 100,
+      paymentMethod: "bank",
+      paidAt: new Date().toISOString()
+    };
+    const before = db.prepare(`SELECT COUNT(*) n FROM ${party}_payments`).get().n;
+    const first = await ok(`${party}s.payment.record`, payload);
+    const second = await ok(`${party}s.payment.record`, payload);
+    assert.equal(second.payment.id, first.payment.id);
+    assert.equal(db.prepare(`SELECT COUNT(*) n FROM ${party}_payments`).get().n, before + 1);
+    assert.equal(
+      (await desktop.call(`${party}s.payment.record`, { ...payload, amountMinor: 200 })).ok,
+      false
+    );
+  }
+});
+test("customer and supplier details can be edited repeatedly", async () => {
+  await login();
+  for (const party of ["customer", "supplier"]) {
+    const id = db.prepare(`SELECT id FROM ${party}s LIMIT 1`).get().id;
+    for (let i = 0; i < 2; i++) {
+      const current = await ok(`${party}s.get`, { id });
+      await ok(`${party}s.save`, {
+        ...current,
+        id,
+        notes: `Repeated edit ${i}`,
+        expectedUpdatedAt: current.updatedAt
+      });
+    }
+  }
+});
 test("home drawer matches the ledger after refunds and change", async () => {
   await login();
   assert.equal(

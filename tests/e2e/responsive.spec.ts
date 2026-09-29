@@ -1,4 +1,5 @@
-import { _electron as electron, expect, test } from "@playwright/test";
+import { _electron as electron } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import { resolve } from "node:path";
 
 test("all workspace layouts fit counter windows and detail drawers", async () => {
@@ -68,7 +69,7 @@ test("all workspace layouts fit counter windows and detail drawers", async () =>
       .locator(".sidebar")
       .getByRole("button", { name: "Sales History", exact: true })
       .click();
-    await page.getByRole("button", { name: "View", exact: true }).first().click();
+    await page.getByRole("button", { name: "View details", exact: true }).first().click();
     const drawer = page.locator(".drawer");
     await expect(drawer).toBeVisible();
     expect(

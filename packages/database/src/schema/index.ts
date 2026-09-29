@@ -39,3 +39,4 @@ export * from "./suppliers.js";
 export * from "./units.js";
 export * from "./user-roles.js";
 export * from "./users.js";
+export * from "./payment-operations.js";

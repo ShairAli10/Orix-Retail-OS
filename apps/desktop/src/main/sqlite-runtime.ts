@@ -55,7 +55,7 @@ export class PersistedEventPublisher implements EventPublisher {
           `INSERT INTO business_events (
             id, store_id, branch_id, event_name, source_type, source_id,
             payload_summary_json, occurred_at, created_at, created_by_user_id
-          ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`
+          ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`
         )
         .run(
           event.id,

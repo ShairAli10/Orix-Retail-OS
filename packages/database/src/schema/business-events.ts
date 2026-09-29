@@ -1,4 +1,4 @@
-import { index, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { auditLogs } from "./audit-logs.js";
 import { branches } from "./branches.js";
 import {
@@ -33,7 +33,7 @@ export const businessEvents = sqliteTable(
     deviceId: deviceId()
   },
   (table) => ({
-    sourceEventUnique: uniqueIndex("business_events_source_event_unique").on(
+    sourceEventIdx: index("business_events_source_event_idx").on(
       table.sourceType,
       table.sourceId,
       table.eventName

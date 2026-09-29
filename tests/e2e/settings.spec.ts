@@ -1,4 +1,5 @@
-import { _electron as electron, expect, test } from "@playwright/test";
+import { _electron as electron } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import { resolve } from "node:path";
 
 test("Settings keeps draft changes explicit and sections usable", async () => {

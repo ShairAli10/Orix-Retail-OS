@@ -1,4 +1,5 @@
-import { _electron as electron, expect, test } from "@playwright/test";
+import { _electron as electron } from "@playwright/test";
+import { expect, test } from "./fixtures.js";
 import { resolve, join } from "node:path";
 import { copyFileSync, readFileSync } from "node:fs";
 

@@ -143,6 +143,12 @@ export class SupplierManagementApplicationService {
   public async recordPayment(
     input: SupplierPaymentWrite
   ): Promise<CoreResult<SupplierPaymentOutput>> {
+    if (input.operationId !== undefined && !/^[a-zA-Z0-9-]{16,80}$/.test(input.operationId)) {
+      return err(validationError("Invalid payment request ID.", ["operationId"]));
+    }
+    if (!Number.isFinite(Date.parse(input.paidAt))) {
+      return err(validationError("Enter a valid payment date.", ["paidAt"]));
+    }
     if (input.amountMinor <= 0) {
       return err(validationError("Supplier payment amount must be greater than zero.", ["amount"]));
     }
@@ -159,7 +165,10 @@ export class SupplierManagementApplicationService {
       () => {
         const payment = this.context.repositories.suppliers.recordPayment(input);
         if (!payment.ok) return Promise.resolve(payment);
-        events.push(this.event("SupplierPaymentRecorded", input.supplierId, input, input.paidAt));
+        events.push({
+          ...this.event("SupplierPaymentRecorded", payment.value.id, input, input.paidAt),
+          id: `supplier-payment-${payment.value.id}`
+        });
         return Promise.resolve(ok({ payment: payment.value }));
       }
     );

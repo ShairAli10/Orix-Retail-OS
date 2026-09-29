@@ -1,5 +1,6 @@
 name: Desktop quality
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [main]
@@ -8,7 +9,7 @@ permissions:
 jobs:
   windows-counter:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -21,7 +22,28 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm test:e2e
-      - run: pnpm pack:win
+      - name: Build Windows installer
+        run: pnpm dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Record installer identity
+        shell: pwsh
+        run: |
+          $version = (Get-Content apps/desktop/package.json -Raw | ConvertFrom-Json).version
+          $installer = Get-Item "release/windows/Orix-Retail-OS-Setup-$version-x64.exe" -ErrorAction Stop
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Set-Content release/windows/SHA256SUMS.txt -Encoding utf8
+          @{
+            version = $version
+            commit = $env:GITHUB_SHA
+            workflowRun = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            installer = $installer.Name
+            sha256 = $hash
+            platform = "win32"
+            architecture = "x64"
+            signed = $false
+            targetMachineAccepted = $false
+          } | ConvertTo-Json | Set-Content release/windows/build-record.json -Encoding utf8
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -30,10 +52,24 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: windows-build-and-symbols-${{ github.sha }}
+          name: windows-installer-${{ github.sha }}
           retention-days: 90
+          if-no-files-found: error
           path: |
-            release/windows/
+            release/windows/Orix-Retail-OS-Setup-*.exe
+            release/windows/SHA256SUMS.txt
+            release/windows/build-record.json
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: windows-support-and-symbols-${{ github.sha }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            release/windows/win-unpacked/
+            release/windows/build-record.json
+            pnpm-lock.yaml
+            packages/database/src/migrations/
             apps/desktop/dist/main/
             apps/desktop/dist/renderer/
             apps/desktop/preload.cjs

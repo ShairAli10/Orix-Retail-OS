@@ -1,3 +1,4 @@
+import { localDateTimeInput } from "./presentation/local-time.js";
 import { returnPreview, returnBlockingMessage } from "./features/sales/return-preview.js";
 import { activitySummary, displayLabel } from "./presentation/text.js";
 import {
@@ -255,6 +256,7 @@ type CustomerFormState = {
 };
 
 type CustomerPaymentFormState = {
+  readonly operationId: string;
   readonly customerId: string;
   readonly amount: string;
   readonly paymentMethod: CustomerPaymentPayload["paymentMethod"];
@@ -282,6 +284,7 @@ type SupplierFormState = {
 };
 
 type SupplierPaymentFormState = {
+  readonly operationId: string;
   readonly supplierId: string;
   readonly amount: string;
   readonly paymentMethod: SupplierPaymentPayload["paymentMethod"];
@@ -544,9 +547,13 @@ const App = () => {
     () => localStorage.getItem("orix.sidebarCollapsed") === "true"
   );
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [supplierAccount, setSupplierAccount] = useState<string | null>(null);
+  const [purchaseSupplier, setPurchaseSupplier] = useState<string | null>(null);
   const [clock, setClock] = useState(() => new Date());
 
   const navigate = useCallback((nextRoute: RouteId) => {
+    if (nextRoute !== "suppliers") setSupplierAccount(null);
+    if (nextRoute !== "purchases") setPurchaseSupplier(null);
     const path = pathForRoute(nextRoute);
     window.history.pushState({ route: nextRoute }, "", `#${path}`);
     setRoute(nextRoute);
@@ -752,10 +759,30 @@ const App = () => {
       return <CustomerModule permissions={context?.permissions ?? []} showToast={showToast} />;
     }
     if (route === "suppliers") {
-      return <SupplierModule permissions={context?.permissions ?? []} showToast={showToast} />;
+      return (
+        <SupplierModule
+          initialSupplierId={supplierAccount}
+          permissions={context?.permissions ?? []}
+          showToast={showToast}
+          onBuy={(id) => {
+            setPurchaseSupplier(id);
+            navigate("purchases");
+          }}
+        />
+      );
     }
     if (route === "purchases") {
-      return <PurchaseModule permissions={context?.permissions ?? []} showToast={showToast} />;
+      return (
+        <PurchaseModule
+          permissions={context?.permissions ?? []}
+          showToast={showToast}
+          onSupplierAccount={(id) => {
+            setSupplierAccount(id);
+            navigate("suppliers");
+          }}
+          initialSupplierId={purchaseSupplier}
+        />
+      );
     }
     if (route === "sales") {
       return (
@@ -796,7 +823,16 @@ const App = () => {
       );
     }
     return <AboutPage version={context?.applicationVersion ?? "0.0.0"} />;
-  }, [context, hasPermission, navigate, route, settings, showToast]);
+  }, [
+    context,
+    hasPermission,
+    navigate,
+    route,
+    settings,
+    showToast,
+    purchaseSupplier,
+    supplierAccount
+  ]);
 
   if (authStatus === null) {
     return (
@@ -1475,7 +1511,7 @@ const CustomerModule = ({
   });
   const [paymentForm, setPaymentForm] = useState<CustomerPaymentFormState | null>(null);
   const [tab, setTab] = useState<
-    "overview" | "statement" | "payments" | "purchases" | "notes" | "activity"
+    "overview" | "statement" | "activity"
   >("overview");
   const [visibleColumns, setVisibleColumns] = useState(
     () => new Set(["name", "phone", "balance", "status", "actions"])
@@ -1611,32 +1647,45 @@ const CustomerModule = ({
     }
   };
 
+  const paymentInFlight = useRef(false);
   const recordPayment = async () => {
+    if (paymentInFlight.current) return;
     if (paymentForm === null) return;
     const validationError = validateCustomerPaymentForm(paymentForm);
     if (validationError !== null) {
       showToast(validationError, "error");
       return;
     }
-    const response = await window.orix.customers.recordPayment({
-      customerId: paymentForm.customerId,
-      amountMinor: toMinor(paymentForm.amount),
-      paymentMethod: paymentForm.paymentMethod,
-      paidAt: paymentForm.paidAt,
-      referenceNumber: paymentForm.referenceNumber || null,
-      receiptNumber: paymentForm.receiptNumber || null,
-      notes: paymentForm.notes || null
-    });
-    if (response.ok) {
-      setPaymentForm(null);
-      showToast("Payment recorded.");
-      await loadCustomers();
-      if (profile !== null) {
-        await loadProfile(profile.id);
-        await loadStatement();
+    paymentInFlight.current = true;
+    try {
+      const response = await window.orix.customers.recordPayment({
+        customerId: paymentForm.customerId,
+        amountMinor: toMinor(paymentForm.amount),
+        paymentMethod: paymentForm.paymentMethod,
+        paidAt: new Date(paymentForm.paidAt).toISOString(),
+        operationId: paymentForm.operationId,
+        referenceNumber: paymentForm.referenceNumber || null,
+        receiptNumber: paymentForm.receiptNumber || null,
+        notes: paymentForm.notes || null
+      });
+      if (response.ok) {
+        setPaymentForm(null);
+        showToast("Payment recorded.");
+        await loadCustomers();
+        if (profile !== null) {
+          await loadProfile(profile.id);
+          await loadStatement();
+        }
+      } else {
+        showToast(response.error.message, "error");
       }
-    } else {
-      showToast(response.error.message, "error");
+    } catch {
+      showToast(
+        "Payment response interrupted. Keep this form unchanged and retry to recover the same payment.",
+        "error"
+      );
+    } finally {
+      paymentInFlight.current = false;
     }
   };
 
@@ -2298,9 +2347,9 @@ const CustomerProfileDrawer = ({
   readonly customer: CustomerDetailDto;
   readonly statement: CustomerStatementDto | null;
   readonly activity: readonly CustomerActivityDto[];
-  readonly tab: "overview" | "statement" | "payments" | "purchases" | "notes" | "activity";
+  readonly tab: "overview" | "statement" | "activity";
   readonly setTab: (
-    tab: "overview" | "statement" | "payments" | "purchases" | "notes" | "activity"
+    tab: "overview" | "statement" | "activity"
   ) => void;
   readonly statementQuery: Omit<CustomerStatementRequest, "customerId">;
   readonly setStatementQuery: (query: Omit<CustomerStatementRequest, "customerId">) => void;
@@ -2339,16 +2388,22 @@ const CustomerProfileDrawer = ({
           Print Statement
         </button>
       </div>
-      <div className="profile-stats">
-        <Metric
-          label={customer.outstandingBalanceMinor < 0 ? "Customer credit" : "Amount to collect"}
-          value={money(Math.abs(customer.outstandingBalanceMinor))}
-        />
-        <Metric label="Credit Limit" value={money(customer.creditLimitMinor)} />
-        <Metric label="Status" value={displayLabel(customer.status)} />
-      </div>
+      <section className="supplier-balance-summary">
+        <span>
+          {customer.outstandingBalanceMinor < 0 ? "Customer credit" : "Amount to collect now"}
+        </span>
+        <strong>{money(Math.abs(customer.outstandingBalanceMinor))}</strong>
+        <p>
+          {customer.outstandingBalanceMinor === 0
+            ? "All settled. Nothing to collect."
+            : customer.outstandingBalanceMinor < 0
+              ? "This customer has credit available with your store."
+              : "Total owed by this customer, after payments and returns."}
+        </p>
+        <span className="pill muted">{displayLabel(customer.status)}</span>
+      </section>
       <div className="inventory-tabs">
-        {(["overview", "statement", "payments", "notes", "activity"] as const).map((item) => (
+        {(["overview", "statement", "activity"] as const).map((item) => (
           <button
             className={tab === item ? "primary" : ""}
             aria-pressed={tab === item}
@@ -2357,30 +2412,41 @@ const CustomerProfileDrawer = ({
               setTab(item);
             }}
           >
-            {item === "statement" ? "Account book" : displayLabel(item)}
+            {item === "statement" ? "Transactions" : item === "overview" ? "Details" : "Activity"}
           </button>
         ))}
       </div>
       {tab === "overview" ? (
         <section className="detail-section">
-          <Detail label="Customer Type" value={displayLabel(customer.customerType)} />
-          <Detail label="Email" value={customer.email ?? "-"} />
-          <Detail label="CNIC" value={customer.cnic ?? "-"} />
-          <Detail label="Tags" value={customer.tags.join(", ") || "-"} />
-          <Detail label="Opening Balance" value={money(customer.openingBalanceMinor)} />
+          <Detail label="Credit limit" value={money(customer.creditLimitMinor)} />
+          <Detail label="Customer type" value={displayLabel(customer.customerType)} />
+          {customer.email ? <Detail label="Email" value={customer.email} /> : null}
+          <Detail label="Notes" value={customer.notes?.trim() ? customer.notes : "No notes recorded."} />
+          <details className="supplier-extra-details">
+            <summary>Starting balance & additional information</summary>
+            <p>
+              The starting balance is already included in this customer’s account history. It is not
+              an extra amount to collect.
+            </p>
+            <Detail label="Starting balance" value={money(customer.openingBalanceMinor)} />
+            {customer.cnic ? <Detail label="CNIC" value={customer.cnic} /> : null}
+            {customer.tags.length ? <Detail label="Tags" value={customer.tags.join(", ")} /> : null}
+          </details>
         </section>
       ) : null}
-      {tab === "statement" || tab === "payments" ? (
+      {tab === "statement" ? (
         <section className="statement-panel">
           <div className="filters">
             <input
-              placeholder="Search statement"
+              aria-label="Search transactions"
+              placeholder="Search transactions"
               value={statementQuery.search ?? ""}
               onChange={(event) => {
                 setStatementQuery({ ...statementQuery, search: event.target.value, page: 1 });
               }}
             />
             <select
+              aria-label="Transaction type"
               value={statementQuery.transactionType}
               onChange={(event) => {
                 setStatementQuery({
@@ -2409,22 +2475,20 @@ const CustomerProfileDrawer = ({
             </span>
           </div>
           <div className="table-wrap">
-            <table className="statement-table">
+            <table className="statement-table customer-transactions-table">
               <thead>
                 <tr>
                   <th>Date</th>
-                  <th>Reference</th>
-                  <th>Description</th>
-                  <th>Debit</th>
-                  <th>Credit</th>
-                  <th>Running Balance</th>
-                  <th>User</th>
+                  <th>Transaction</th>
+                  <th>Added to bill</th>
+                  <th>Paid / reduced</th>
+                  <th>Balance after</th>
                 </tr>
               </thead>
               <tbody>
                 {statement?.items.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="state-cell">
+                    <td colSpan={5} className="state-cell">
                       No account-book entries yet.
                     </td>
                   </tr>
@@ -2432,12 +2496,22 @@ const CustomerProfileDrawer = ({
                   statement?.items.map((line) => (
                     <tr key={line.id}>
                       <td>{new Date(line.date).toLocaleDateString("en-PK")}</td>
-                      <td>{line.reference}</td>
-                      <td>{line.description}</td>
+                      <td>
+                        {line.description}
+                        {line.reference &&
+                        !line.reference.includes(":") &&
+                        line.reference !== "-" ? (
+                          <small className="sale-secondary">{line.reference}</small>
+                        ) : null}
+                      </td>
                       <td>{line.debitMinor === 0 ? "-" : money(line.debitMinor)}</td>
                       <td>{line.creditMinor === 0 ? "-" : money(line.creditMinor)}</td>
-                      <td>{money(line.runningBalanceMinor)}</td>
-                      <td>{line.userName}</td>
+                      <td>
+                        {money(Math.abs(line.runningBalanceMinor))}
+                        {line.runningBalanceMinor < 0 ? (
+                          <small className="sale-secondary">Customer credit</small>
+                        ) : null}
+                      </td>
                     </tr>
                   ))
                 )}
@@ -2445,9 +2519,6 @@ const CustomerProfileDrawer = ({
             </table>
           </div>
         </section>
-      ) : null}
-      {tab === "notes" ? (
-        <p className="muted-text">{customer.notes ?? "No notes recorded."}</p>
       ) : null}
       {tab === "activity" ? (
         activity.length === 0 ? (
@@ -2482,10 +2553,11 @@ const initials = (name: string): string =>
 const paymentFormFor = (
   customer: CustomerListItemDto | CustomerDetailDto
 ): CustomerPaymentFormState => ({
+  operationId: crypto.randomUUID(),
   customerId: customer.id,
   amount: fromMinor(Math.max(0, customer.outstandingBalanceMinor)),
   paymentMethod: "cash",
-  paidAt: new Date().toISOString().slice(0, 16),
+  paidAt: localDateTimeInput(),
   referenceNumber: "",
   receiptNumber: "",
   notes: ""
@@ -2502,7 +2574,6 @@ const PosModule = ({
   readonly settings: AppSettingsDto | null;
   readonly showToast: (message: string, tone?: ToastState["tone"]) => void;
 }) => {
-  const [products, setProducts] = useState<readonly ProductListItemDto[]>([]);
   const [customers, setCustomers] = useState<readonly CustomerListItemDto[]>([]);
   const [cashRegister, setCashRegister] = useState<CashRegisterDto | null>(null);
   const [salesDashboard, setSalesDashboard] = useState<SalesDashboardDto | null>(null);
@@ -2521,6 +2592,7 @@ const PosModule = ({
   const [receipt, setReceipt] = useState<ReceiptDto | null>(null);
   const [heldSales, setHeldSales] = useState<readonly SaleListItemDto[]>([]);
   const [showHeld, setShowHeld] = useState(false);
+  const saleInFlight = useRef(false);
   const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
   const [saleProcessing, setSaleProcessing] = useState<"complete" | "hold" | "cancel-held" | null>(
     null
@@ -2533,34 +2605,25 @@ const PosModule = ({
   const canPrint = permissions.includes("sales.print");
 
   const loadPosData = useCallback(async () => {
-    const [productsResponse, customersResponse, cashResponse, salesResponse, heldResponse] =
-      await Promise.all([
-        window.orix.products.list({
-          page: 1,
-          pageSize: 50,
-          sortBy: "name",
-          sortDirection: "asc",
-          status: "active"
-        }),
-        window.orix.customers.list({
-          page: 1,
-          pageSize: 50,
-          sortBy: "name",
-          sortDirection: "asc",
-          status: "active",
-          customerType: "all"
-        }),
-        window.orix.cashRegister.summary(),
-        window.orix.sales.dashboard(),
-        window.orix.sales.list({
-          page: 1,
-          pageSize: 500,
-          sortBy: "createdAt",
-          sortDirection: "desc",
-          status: "held"
-        })
-      ]);
-    if (productsResponse.ok) setProducts(productsResponse.value.items);
+    const [customersResponse, cashResponse, salesResponse, heldResponse] = await Promise.all([
+      window.orix.customers.list({
+        page: 1,
+        pageSize: 50,
+        sortBy: "name",
+        sortDirection: "asc",
+        status: "active",
+        customerType: "all"
+      }),
+      window.orix.cashRegister.summary(),
+      window.orix.sales.dashboard(),
+      window.orix.sales.list({
+        page: 1,
+        pageSize: 500,
+        sortBy: "createdAt",
+        sortDirection: "desc",
+        status: "held"
+      })
+    ]);
     if (customersResponse.ok) setCustomers(customersResponse.value.items);
     if (cashResponse.ok) setCashRegister(cashResponse.value);
     if (salesResponse.ok) setSalesDashboard(salesResponse.value);
@@ -2573,6 +2636,7 @@ const PosModule = ({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (saleInFlight.current || showHeld || showCompleteConfirm) return;
       if (event.ctrlKey && event.key.toLowerCase() === "n") {
         event.preventDefault();
         if (form.items.length === 0 || window.confirm("Clear this unsaved basket?"))
@@ -2694,9 +2758,6 @@ const PosModule = ({
       showToast("Product is not active.", "error");
       return;
     }
-    setProducts((previous) =>
-      previous.some((item) => item.id === product.id) ? previous : [...previous, product]
-    );
     setForm((previous) => ({
       ...previous,
       items: previous.items.some((item) => item.productId === product.id)
@@ -2784,31 +2845,40 @@ const PosModule = ({
   });
 
   const holdSale = async () => {
-    if (!canCreate) return;
+    if (!canCreate || saleInFlight.current) return;
     if (form.items.length === 0) {
       showToast("Add at least one item before holding a sale.", "error");
       return;
     }
+    saleInFlight.current = true;
     setSaleProcessing("hold");
-    const response = await window.orix.sales.hold({
-      ...toSalePayload(),
-      holdReason: form.holdReason || "Held from POS"
-    });
-    if (response.ok) {
-      showToast("Sale held.");
-      setForm(emptySaleForm);
-      setLastSaleError(null);
-      await loadPosData();
-    } else {
-      const message = posSaleErrorMessage(response.error.message, response.error.fields);
-      setLastSaleError(message);
-      showToast(message, "error");
+    try {
+      const response = await window.orix.sales.hold({
+        ...toSalePayload(),
+        holdReason: form.holdReason || "Held from POS"
+      });
+      if (response.ok) {
+        showToast("Sale held.");
+        setForm(emptySaleForm);
+        setLastSaleError(null);
+        await loadPosData();
+      } else {
+        const message = posSaleErrorMessage(response.error.message, response.error.fields);
+        setLastSaleError(message);
+        showToast(message, "error");
+      }
+    } catch {
+      setLastSaleError(
+        "Hold response interrupted. Check Held Sales before trying again; your basket is preserved."
+      );
+    } finally {
+      saleInFlight.current = false;
+      setSaleProcessing(null);
     }
-    setSaleProcessing(null);
   };
 
   const completeSale = async () => {
-    if (saleProcessing !== null) return;
+    if (saleInFlight.current) return;
     if (!canComplete) return;
     const blockingMessage = posBlockingMessage(form, totals.totalMinor);
     if (blockingMessage !== null) {
@@ -2816,6 +2886,7 @@ const PosModule = ({
       showToast(blockingMessage, "error");
       return;
     }
+    saleInFlight.current = true;
     setSaleProcessing("complete");
     setShowCompleteConfirm(false);
     try {
@@ -2838,43 +2909,68 @@ const PosModule = ({
         "Connection interrupted. Keep this basket and retry: the same checkout will not be posted twice."
       );
     } finally {
+      saleInFlight.current = false;
       setSaleProcessing(null);
     }
   };
 
   const resumeSale = async (sale: SaleListItemDto) => {
-    const response = await window.orix.sales.get(sale.id);
-    if (!response.ok || response.value === undefined) {
-      showToast(response.ok ? "Held sale was not found." : response.error.message, "error");
+    if (saleInFlight.current) return;
+    if (
+      form.items.length > 0 &&
+      !window.confirm(
+        "Replace the current basket with this held sale? Hold the current basket first if you want to keep it."
+      )
+    )
       return;
+    saleInFlight.current = true;
+    setSaleProcessing("hold");
+    try {
+      const response = await window.orix.sales.get(sale.id);
+      if (!response.ok || response.value === undefined) {
+        showToast(response.ok ? "Held sale was not found." : response.error.message, "error");
+        return;
+      }
+      const detail = response.value;
+      const stock = await Promise.all(
+        detail.items.map((item) => window.orix.products.get(item.productId))
+      );
+      if (stock.some((result) => !result.ok || result.value === undefined)) {
+        showToast("Could not verify stock. Refresh and try resuming again.", "error");
+        return;
+      }
+      setForm({
+        id: detail.id,
+        operationId: crypto.randomUUID(),
+        customerId: detail.customerId ?? "",
+        saleNumber: detail.saleNumber,
+        saleDate: new Date().toISOString(),
+        paymentType: detail.paymentType,
+        discount: fromMinor(detail.discountMinor),
+        tax: fromMinor(detail.taxMinor),
+        cashReceived: fromMinor(detail.paidMinor),
+        notes: detail.notes ?? "",
+        holdReason: detail.holdReason ?? "",
+        items: detail.items.map((item, index) => ({
+          productId: item.productId,
+          productName: item.productName,
+          barcode: item.barcode,
+          unitId: item.unitId,
+          quantity: item.quantity,
+          unitPriceMinor: item.unitPriceMinor,
+          discountMinor: item.discountMinor,
+          taxMinor: item.taxMinor,
+          currentStock: stock[index]?.ok ? (stock[index].value?.currentStock ?? 0) : 0
+        })),
+        expectedUpdatedAt: detail.updatedAt
+      });
+      setShowHeld(false);
+    } catch {
+      showToast("Held sale could not be loaded. Your current basket is unchanged.", "error");
+    } finally {
+      saleInFlight.current = false;
+      setSaleProcessing(null);
     }
-    const detail = response.value;
-    setForm({
-      id: detail.id,
-      operationId: crypto.randomUUID(),
-      customerId: detail.customerId ?? "",
-      saleNumber: detail.saleNumber,
-      saleDate: new Date().toISOString(),
-      paymentType: detail.paymentType,
-      discount: fromMinor(detail.discountMinor),
-      tax: fromMinor(detail.taxMinor),
-      cashReceived: fromMinor(detail.paidMinor),
-      notes: detail.notes ?? "",
-      holdReason: detail.holdReason ?? "",
-      items: detail.items.map((item) => ({
-        productId: item.productId,
-        productName: item.productName,
-        barcode: item.barcode,
-        unitId: item.unitId,
-        quantity: item.quantity,
-        unitPriceMinor: item.unitPriceMinor,
-        discountMinor: item.discountMinor,
-        taxMinor: item.taxMinor,
-        currentStock: products.find((product) => product.id === item.productId)?.currentStock ?? 0
-      })),
-      expectedUpdatedAt: detail.updatedAt
-    });
-    setShowHeld(false);
   };
 
   const cancelHeldSale = async (sale: SaleListItemDto) => {
@@ -3323,7 +3419,12 @@ const PosModule = ({
             </div>
             <div className="sale-confirm-grid">
               <Detail label="Customer" value={selectedCustomer?.name ?? "Walk-in Customer"} />
-              <Detail label="Payment" value={form.paymentType} />
+              <Detail
+                label="Payment"
+                value={
+                  form.paymentType === "mixed" ? "Cash + Credit" : displayLabel(form.paymentType)
+                }
+              />
               <Detail label="Items" value={String(form.items.length)} />
               <Detail label="Cash received" value={money(toMinor(form.cashReceived))} />
               <Detail label="Change" value={money(change)} />
@@ -3361,7 +3462,12 @@ const PosModule = ({
         </Dialog>
       ) : null}
       {showHeld ? (
-        <div className="modal-backdrop">
+        <Dialog
+          label="Held sales"
+          onClose={() => {
+            if (!saleInFlight.current) setShowHeld(false);
+          }}
+        >
           <section className="modal customer-modal">
             <header>
               <h2>Held Sales</h2>
@@ -3407,7 +3513,7 @@ const PosModule = ({
               )}
             </div>
           </section>
-        </div>
+        </Dialog>
       ) : null}
       {receipt === null ? null : (
         <ReceiptPreview
@@ -4192,8 +4298,12 @@ const posSaleErrorMessage = (message: string, fields: readonly string[] | undefi
 
 const SupplierModule = ({
   permissions,
+  onBuy,
+  initialSupplierId,
   showToast
 }: {
+  readonly initialSupplierId: string | null;
+  readonly onBuy: (supplierId: string) => void;
   readonly permissions: readonly AppContextDto["permissions"][number][];
   readonly showToast: (message: string, tone?: ToastState["tone"]) => void;
 }) => {
@@ -4212,7 +4322,7 @@ const SupplierModule = ({
   const [statement, setStatement] = useState<SupplierStatementDto | null>(null);
   const [activity, setActivity] = useState<readonly SupplierActivityDto[]>([]);
   const [paymentForm, setPaymentForm] = useState<SupplierPaymentFormState | null>(null);
-  const [tab, setTab] = useState<"overview" | "statement" | "payments" | "purchases" | "activity">(
+  const [tab, setTab] = useState<"overview" | "statement" | "activity">(
     "overview"
   );
   const [statementQuery, setStatementQuery] = useState<
@@ -4254,6 +4364,10 @@ const SupplierModule = ({
     },
     [showToast]
   );
+
+  useEffect(() => {
+    if (initialSupplierId) void loadProfile(initialSupplierId);
+  }, [initialSupplierId, loadProfile]);
 
   const loadStatement = useCallback(async () => {
     if (profile === null) return;
@@ -4310,32 +4424,45 @@ const SupplierModule = ({
     }
   };
 
+  const paymentInFlight = useRef(false);
   const recordPayment = async () => {
+    if (paymentInFlight.current) return;
     if (paymentForm === null) return;
     const validationError = validateSupplierPaymentForm(paymentForm);
     if (validationError !== null) {
       showToast(validationError, "error");
       return;
     }
-    const response = await window.orix.suppliers.recordPayment({
-      supplierId: paymentForm.supplierId,
-      amountMinor: toMinor(paymentForm.amount),
-      paymentMethod: paymentForm.paymentMethod,
-      paidAt: paymentForm.paidAt,
-      referenceNumber: paymentForm.referenceNumber || null,
-      receiptNumber: paymentForm.receiptNumber || null,
-      notes: paymentForm.notes || null
-    });
-    if (response.ok) {
-      setPaymentForm(null);
-      showToast("Supplier payment recorded.");
-      await loadSuppliers();
-      if (profile !== null) {
-        await loadProfile(profile.id);
-        await loadStatement();
+    paymentInFlight.current = true;
+    try {
+      const response = await window.orix.suppliers.recordPayment({
+        supplierId: paymentForm.supplierId,
+        amountMinor: toMinor(paymentForm.amount),
+        paymentMethod: paymentForm.paymentMethod,
+        paidAt: new Date(paymentForm.paidAt).toISOString(),
+        operationId: paymentForm.operationId,
+        referenceNumber: paymentForm.referenceNumber || null,
+        receiptNumber: paymentForm.receiptNumber || null,
+        notes: paymentForm.notes || null
+      });
+      if (response.ok) {
+        setPaymentForm(null);
+        showToast("Supplier payment recorded.");
+        await loadSuppliers();
+        if (profile !== null) {
+          await loadProfile(profile.id);
+          await loadStatement();
+        }
+      } else {
+        showToast(response.error.message, "error");
       }
-    } else {
-      showToast(response.error.message, "error");
+    } catch {
+      showToast(
+        "Payment response interrupted. Keep this form unchanged and retry to recover the same payment.",
+        "error"
+      );
+    } finally {
+      paymentInFlight.current = false;
     }
   };
 
@@ -4546,6 +4673,13 @@ const SupplierModule = ({
       {profile === null || form !== null || paymentForm !== null ? null : (
         <SupplierProfileDrawer
           supplier={profile}
+          onBuy={
+            permissions.includes("purchases.create") && profile.status === "active"
+              ? () => {
+                  onBuy(profile.id);
+                }
+              : undefined
+          }
           statement={statement}
           activity={activity}
           tab={tab}
@@ -4837,6 +4971,7 @@ const SupplierPaymentDialog = ({
 
 const SupplierProfileDrawer = ({
   supplier,
+  onBuy,
   statement,
   activity,
   tab,
@@ -4849,11 +4984,12 @@ const SupplierProfileDrawer = ({
   onPayment,
   onClose
 }: {
+  readonly onBuy: (() => void) | undefined;
   readonly supplier: SupplierDetailDto;
   readonly statement: SupplierStatementDto | null;
   readonly activity: readonly SupplierActivityDto[];
-  readonly tab: "overview" | "statement" | "payments" | "purchases" | "activity";
-  readonly setTab: (tab: "overview" | "statement" | "payments" | "purchases" | "activity") => void;
+  readonly tab: "overview" | "statement" | "activity";
+  readonly setTab: (tab: "overview" | "statement" | "activity") => void;
   readonly statementQuery: Omit<SupplierStatementRequest, "supplierId">;
   readonly setStatementQuery: (query: Omit<SupplierStatementRequest, "supplierId">) => void;
   readonly canEdit: boolean;
@@ -4880,6 +5016,11 @@ const SupplierProfileDrawer = ({
         <button disabled={!canPay} onClick={onPayment}>
           Record Payment
         </button>
+        {onBuy ? (
+          <button className="primary" onClick={onBuy}>
+            Buy from this supplier
+          </button>
+        ) : null}
         <button disabled={!canEdit} onClick={onEdit}>
           Edit
         </button>
@@ -4891,16 +5032,22 @@ const SupplierProfileDrawer = ({
           Print Statement
         </button>
       </div>
-      <div className="profile-stats">
-        <Metric
-          label={supplier.outstandingBalanceMinor < 0 ? "Credit with supplier" : "Amount to pay"}
-          value={money(Math.abs(supplier.outstandingBalanceMinor))}
-        />
-        <Metric label="Credit Terms" value={supplier.creditTerms ?? "-"} />
-        <Metric label="Status" value={displayLabel(supplier.status)} />
-      </div>
+      <section className="supplier-balance-summary">
+        <span>
+          {supplier.outstandingBalanceMinor < 0 ? "Credit with supplier" : "Amount to pay now"}
+        </span>
+        <strong>{money(Math.abs(supplier.outstandingBalanceMinor))}</strong>
+        <p>
+          {supplier.outstandingBalanceMinor === 0
+            ? "All settled. Nothing to pay."
+            : supplier.outstandingBalanceMinor < 0
+              ? "You have credit available with this supplier."
+              : "Total owed across this supplier’s account, after payments and returns."}
+        </p>
+        <span className="pill muted">{displayLabel(supplier.status)}</span>
+      </section>
       <div className="inventory-tabs">
-        {(["overview", "statement", "payments", "purchases", "activity"] as const).map((item) => (
+        {(["overview", "statement", "activity"] as const).map((item) => (
           <button
             className={tab === item ? "primary" : ""}
             aria-pressed={tab === item}
@@ -4909,29 +5056,39 @@ const SupplierProfileDrawer = ({
               setTab(item);
             }}
           >
-            {item === "statement" ? "Account book" : displayLabel(item)}
+            {item === "statement" ? "Transactions" : item === "overview" ? "Details" : "Activity"}
           </button>
         ))}
       </div>
       {tab === "overview" ? (
         <section className="detail-section">
-          <Detail label="Email" value={supplier.email ?? "-"} />
           <Detail
             label="Last purchase"
             value={
-              supplier.lastPurchaseAt === null
-                ? "No purchases yet"
-                : new Date(supplier.lastPurchaseAt).toLocaleDateString("en-PK")
+              supplier.lastPurchaseAt
+                ? new Date(supplier.lastPurchaseAt).toLocaleDateString("en-PK")
+                : "No purchases yet"
             }
           />
-          <Detail label="NTN" value={supplier.ntn ?? "-"} />
-          <Detail label="STRN" value={supplier.strn ?? "-"} />
-          <Detail label="Tags" value={supplier.tags.join(", ") || "-"} />
-          <Detail label="Opening Balance" value={money(supplier.openingBalanceMinor)} />
-          <Detail label="Notes" value={supplier.notes ?? "-"} />
+          {supplier.email ? <Detail label="Email" value={supplier.email} /> : null}
+          {supplier.creditTerms ? (
+            <Detail label="Payment terms" value={supplier.creditTerms} />
+          ) : null}
+          {supplier.notes ? <Detail label="Notes" value={supplier.notes} /> : null}
+          <details className="supplier-extra-details">
+            <summary>Starting balance & business information</summary>
+            <p>
+              The starting balance was recorded when this supplier was set up. It is already
+              included in the account history; it is not an extra amount to pay.
+            </p>
+            <Detail label="Starting balance" value={money(supplier.openingBalanceMinor)} />
+            {supplier.ntn ? <Detail label="NTN" value={supplier.ntn} /> : null}
+            {supplier.strn ? <Detail label="STRN" value={supplier.strn} /> : null}
+            {supplier.tags.length ? <Detail label="Tags" value={supplier.tags.join(", ")} /> : null}
+          </details>
         </section>
       ) : null}
-      {tab === "statement" || tab === "payments" ? (
+      {tab === "statement" ? (
         <section className="statement-panel">
           <div className="filters">
             <input
@@ -5007,12 +5164,6 @@ const SupplierProfileDrawer = ({
           </div>
         </section>
       ) : null}
-      {tab === "purchases" ? (
-        <EmptyState
-          title="Purchase links"
-          description="Supplier purchases appear in the Purchases module."
-        />
-      ) : null}
       {tab === "activity" ? (
         activity.length === 0 ? (
           <EmptyState
@@ -5038,10 +5189,11 @@ const SupplierProfileDrawer = ({
 const supplierPaymentFormFor = (
   supplier: SupplierListItemDto | SupplierDetailDto
 ): SupplierPaymentFormState => ({
+  operationId: crypto.randomUUID(),
   supplierId: supplier.id,
   amount: fromMinor(Math.max(0, supplier.outstandingBalanceMinor)),
   paymentMethod: "cash",
-  paidAt: new Date().toISOString().slice(0, 16),
+  paidAt: localDateTimeInput(),
   referenceNumber: "",
   receiptNumber: "",
   notes: ""
@@ -5049,8 +5201,12 @@ const supplierPaymentFormFor = (
 
 const PurchaseModule = ({
   permissions,
+  initialSupplierId,
+  onSupplierAccount,
   showToast
 }: {
+  readonly onSupplierAccount: (id: string) => void;
+  readonly initialSupplierId: string | null;
   readonly permissions: readonly AppContextDto["permissions"][number][];
   readonly showToast: (message: string, tone?: ToastState["tone"]) => void;
 }) => {
@@ -5067,7 +5223,11 @@ const PurchaseModule = ({
   });
   const [totalItems, setTotalItems] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [form, setForm] = useState<PurchaseFormState | null>(null);
+  const [form, setForm] = useState<PurchaseFormState | null>(() =>
+    initialSupplierId && permissions.includes("purchases.create")
+      ? { ...emptyPurchaseForm, supplierId: initialSupplierId }
+      : null
+  );
   const [detail, setDetail] = useState<PurchaseDetailDto | null>(null);
   const [cancelTarget, setCancelTarget] = useState<PurchaseListItemDto | null>(null);
   const [cancelReason, setCancelReason] = useState("");
@@ -5202,7 +5362,9 @@ const PurchaseModule = ({
   const receivePurchase = async (purchase: PurchaseListItemDto) => {
     const response = await window.orix.purchases.receive(purchase.id);
     if (response.ok) {
-      showToast("Purchase received. Inventory and ledger updated.");
+      showToast(
+        `Stock received. ${money(response.value.purchase.totalMinor)} added to ${response.value.purchase.supplierName}’s balance.`
+      );
       await loadPurchases();
       setDetail(response.value.purchase);
     } else {
@@ -5350,7 +5512,7 @@ const PurchaseModule = ({
               <th>Purchase / supplier</th>
               <th>Date</th>
               <th>Total</th>
-              <th>Payment</th>
+              <th>Supplier account</th>
               <th>Status</th>
               <th>Actions</th>
             </tr>
@@ -5385,17 +5547,27 @@ const PurchaseModule = ({
                   <td>{new Date(purchase.purchaseDate).toLocaleDateString("en-PK")}</td>
                   <td>{money(purchase.totalMinor)}</td>
                   <td>
-                    <span
-                      className={`pill ${purchase.paymentStatus === "paid" ? "success" : "warning"}`}
-                    >
-                      {displayLabel(purchase.paymentStatus)}
-                    </span>
+                    {purchase.status === "received" ? (
+                      <button
+                        onClick={() => {
+                          onSupplierAccount(purchase.supplierId);
+                        }}
+                      >
+                        View balance / pay
+                      </button>
+                    ) : (
+                      <span>Not received</span>
+                    )}
                   </td>
                   <td>
                     <span
                       className={`pill ${purchase.status === "received" ? "success" : purchase.status === "cancelled" ? "danger" : "warning"}`}
                     >
-                      {displayLabel(purchase.status)}
+                      {purchase.status === "draft"
+                        ? "Draft — stock not added"
+                        : purchase.status === "received"
+                          ? "Received — stock added"
+                          : displayLabel(purchase.status)}
                     </span>
                   </td>
                   <td>
@@ -5405,7 +5577,9 @@ const PurchaseModule = ({
                         <button onClick={() => void editPurchase(purchase.id)}>Edit</button>
                       ) : null}
                       {canReceive && purchase.status === "draft" ? (
-                        <button onClick={() => void receivePurchase(purchase)}>Receive</button>
+                        <button onClick={() => void receivePurchase(purchase)}>
+                          Receive stock
+                        </button>
                       ) : null}
                       {canCancel && purchase.status === "draft" ? (
                         <button
@@ -5450,6 +5624,9 @@ const PurchaseModule = ({
       {detail === null ? null : (
         <PurchaseDetailsDrawer
           purchase={detail}
+          onSupplierAccount={() => {
+            onSupplierAccount(detail.supplierId);
+          }}
           onClose={() => {
             setDetail(null);
           }}
@@ -5547,8 +5724,8 @@ const PurchaseForm = ({
           <button onClick={onClose}>Close</button>
         </header>
         <p className="purchase-help">
-          Save a draft first. Receive it when the goods arrive to add stock and update the supplier
-          account.
+          Choose a supplier, add items and quantities, then save a draft. A draft does not change
+          stock or the supplier balance. Use Receive stock when the goods arrive.
         </p>
         <div className="form-grid">
           <label
@@ -5807,8 +5984,10 @@ const PurchaseForm = ({
 
 const PurchaseDetailsDrawer = ({
   purchase,
+  onSupplierAccount,
   onClose
 }: {
+  readonly onSupplierAccount: () => void;
   readonly purchase: PurchaseDetailDto;
   readonly onClose: () => void;
 }) => (
@@ -5828,10 +6007,20 @@ const PurchaseDetailsDrawer = ({
       </header>
       <div className="profile-stats">
         <Metric label="Grand Total" value={money(purchase.totalMinor)} />
-        <Metric label="Payment" value={displayLabel(purchase.paymentStatus)} />
+
         <Metric label="Status" value={displayLabel(purchase.status)} />
       </div>
       <section className="detail-section">
+        <p>
+          Payments are recorded against the supplier’s overall balance, not individual purchases.
+        </p>
+        {purchase.status === "received" ? (
+          <button className="primary" onClick={onSupplierAccount}>
+            View supplier balance / record payment
+          </button>
+        ) : (
+          <p>Receive this purchase before paying for these goods.</p>
+        )}
         <Detail label="Invoice" value={purchase.invoiceNumber ?? "-"} />
         <Detail
           label="Purchase Date"
@@ -6759,7 +6948,10 @@ const ProductModule = ({
         <div>
           <p className="eyebrow">Items you sell</p>
           <h1>Items</h1>
-          <p className="muted-text">Add products once, then sell them quickly from POS.</p>
+          <p className="muted-text">
+            Create each item once. This defines what you sell; it does not add stock. Use Opening
+            Stock for goods you already have, or Buy Stock for new deliveries.
+          </p>
         </div>
         <div className="topbar-actions">
           <button
@@ -7398,6 +7590,10 @@ const InventoryModule = ({
         <div>
           <p className="eyebrow">Stock Control</p>
           <h1>Inventory</h1>
+          <p className="muted-text">
+            Opening Stock records goods you already had. Adjust Stock corrects damage, losses or
+            counting differences. Record new supplier deliveries in Buy Stock.
+          </p>
         </div>
         <div className="topbar-actions">
           <button onClick={exportCsv}>Export CSV</button>
