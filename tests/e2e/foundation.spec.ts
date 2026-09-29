@@ -1,8 +1,9 @@
 import { _electron as electron } from "@playwright/test";
 import { expect, test } from "./fixtures.js";
 import { resolve, join } from "node:path";
-import { copyFileSync, readFileSync } from "node:fs";
+import { copyFileSync, readFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { once } from "node:events";
 
 test("owner can reconcile the counter and recover a checkout basket", async () => {
   test.skip(!process.env.ORIX_DEMO_DIRECTORY, "Run pnpm test:e2e for an isolated seeded profile.");
@@ -121,6 +122,7 @@ test("forced process exit is reported on the next launch", async () => {
   });
   await test.step("Force-stop the entire Electron process tree", async () => {
     const closed = first.waitForEvent("close", { timeout: 10000 });
+    const exited = once(first.process(), "exit");
     // Windows parent-only termination leaves renderer children holding profile
     // files and inherited pipes open. Match Playwright's process-tree cleanup.
     if (process.platform === "win32") {
@@ -128,7 +130,17 @@ test("forced process exit is reported on the next launch", async () => {
     } else {
       first.process().kill("SIGKILL");
     }
-    await closed;
+    await Promise.all([closed, exited]);
+    if (process.platform === "win32") {
+      // Chromium deletes this lock when the last owning handle closes. Browser
+      // disconnection alone does not mean Windows has finished process teardown.
+      await expect
+        .poll(() => existsSync(join(process.env.ORIX_DEMO_DIRECTORY!, "lockfile")), {
+          timeout: 10000,
+          message: "Windows releases the crashed session's profile lock"
+        })
+        .toBe(false);
+    }
   });
   const second = await launch();
   try {
