@@ -35,6 +35,7 @@ export type SystemHealthContract = IpcContract<
 export type ProductStatusFilter = "active" | "inactive" | "archived" | "all";
 
 export type ProductListRequest = {
+  readonly barcode?: string;
   readonly search?: string;
   readonly categoryId?: string;
   readonly brandId?: string;
@@ -333,6 +334,7 @@ export type PermissionCode =
   | "sales.return"
   | "sales.print"
   | "expenses.view"
+  | "expenses.manage"
   | "reports.view"
   | "settings.view"
   | "settings.manage"
@@ -451,6 +453,8 @@ export type ReportRequest = {
 };
 
 export type DailySalesReportRowDto = {
+  readonly refundedMinor: number;
+  readonly netTotalMinor: number;
   readonly saleId: string;
   readonly saleNumber: string;
   readonly saleDate: string;
@@ -517,6 +521,8 @@ export type ReportsSummaryDto = {
   readonly dateFrom: string;
   readonly dateTo: string;
   readonly totals: {
+    readonly grossSalesMinor: number;
+    readonly returnsMinor: number;
     readonly salesMinor: number;
     readonly cashExpectedMinor: number;
     readonly inventoryPurchaseValueMinor: number;
@@ -967,6 +973,7 @@ export type SaleItemPayload = {
 };
 
 export type SaleWritePayload = {
+  readonly operationId?: string;
   readonly id?: string;
   readonly customerId?: string | null;
   readonly saleNumber?: string | null;
@@ -994,6 +1001,10 @@ export type SaleListRequest = {
 };
 
 export type SaleListItemDto = {
+  readonly returnStatus: "none" | "partial" | "full";
+  readonly refundedMinor: number;
+  readonly netTotalMinor: number;
+
   readonly id: string;
   readonly saleNumber: string;
   readonly customerId: string | null;
@@ -1907,3 +1918,90 @@ export type OrixIpcContract =
   | ProductCatalogSaveContract
   | ProductCatalogArchiveContract
   | ProductCatalogRestoreContract;
+
+export type CounterSummaryDto = {
+  readonly backupWarning?: string;
+  readonly session: {
+    readonly id: string;
+    readonly status: string;
+    readonly openingCashMinor: number;
+    readonly expectedCashMinor: number | null;
+    readonly countedCashMinor: number | null;
+    readonly varianceMinor: number | null;
+    readonly openedAt: string;
+    readonly closedAt: string | null;
+    readonly notes: string | null;
+  } | null;
+  readonly expectedCashMinor: number;
+  readonly expenses: readonly {
+    readonly id: string;
+    readonly description: string;
+    readonly amountMinor: number;
+    readonly expenseDate: string;
+    readonly status: string;
+  }[];
+};
+export type CounterSummaryContract = IpcContract<
+  "orix:counter.summary",
+  Record<string, never>,
+  CounterSummaryDto,
+  AppIpcError
+>;
+export type CounterOpenContract = IpcContract<
+  "orix:counter.open",
+  { readonly openingCashMinor: number },
+  CounterSummaryDto,
+  AppIpcError
+>;
+export type CounterCloseContract = IpcContract<
+  "orix:counter.close",
+  { readonly countedCashMinor: number; readonly reason: string },
+  CounterSummaryDto,
+  AppIpcError
+>;
+export type CounterExpenseContract = IpcContract<
+  "orix:counter.expense",
+  { readonly amountMinor: number; readonly description: string; readonly operationId: string },
+  CounterSummaryDto,
+  AppIpcError
+>;
+
+export type DiagnosticsStatusDto = {
+  readonly appVersion: string;
+  readonly buildId: string;
+  readonly platform: string;
+  readonly arch: string;
+  readonly osRelease: string;
+  readonly electron: string;
+  readonly node: string;
+  readonly previousUncleanShutdown: boolean;
+  readonly loggingAvailable: boolean;
+};
+export type DiagnosticsStatusContract = IpcContract<
+  "orix:diagnostics.status",
+  Record<string, never>,
+  DiagnosticsStatusDto,
+  AppIpcError
+>;
+export type DiagnosticsNoticeContract = IpcContract<
+  "orix:diagnostics.notice",
+  Record<string, never>,
+  Pick<DiagnosticsStatusDto, "previousUncleanShutdown" | "loggingAvailable">,
+  AppIpcError
+>;
+export type DiagnosticsExportContract = IpcContract<
+  "orix:diagnostics.export",
+  Record<string, never>,
+  { readonly filePath: string | null },
+  AppIpcError
+>;
+export type DiagnosticsReportContract = IpcContract<
+  "orix:diagnostics.report",
+  {
+    readonly kind: "error" | "unhandled-rejection" | "react";
+    readonly name?: string;
+    readonly stack?: string;
+  },
+  { readonly recorded: boolean },
+  AppIpcError
+>;

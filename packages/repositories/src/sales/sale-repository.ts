@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { refundForQuantity } from "../shared/refund-allocation.js";
+import { createHash, randomUUID } from "node:crypto";
 import { sales } from "@orix/database";
 import type { CoreResult } from "@orix/core";
 import { err, ok } from "@orix/core";
@@ -22,6 +23,7 @@ export type SaleItemWrite = {
 };
 
 export type SaleWrite = {
+  readonly operationId?: string;
   readonly id?: string;
   readonly storeId: string;
   readonly branchId: string;
@@ -64,6 +66,10 @@ export type SaleMetadata = {
 };
 
 export type SaleListItem = {
+  readonly returnStatus: "none" | "partial" | "full";
+  readonly refundedMinor: number;
+  readonly netTotalMinor: number;
+
   readonly id: string;
   readonly saleNumber: string;
   readonly customerId: string | null;
@@ -212,6 +218,10 @@ export type SalesDashboardSummary = {
 };
 
 type SaleRow = {
+  readonly returnStatus: "none" | "partial" | "full";
+  readonly refundedMinor: number;
+  readonly netTotalMinor: number;
+
   readonly id: string;
   readonly saleNumber: string;
   readonly customerId: string | null;
@@ -332,6 +342,48 @@ export class SaleRepository extends BaseRepository<typeof sales> {
     }
   }
 
+  public completedOperation(input: SaleWrite): CoreResult<SaleDetail | undefined> {
+    if (input.operationId === undefined) return ok(undefined);
+    const existing = this.connection.sqlite
+      .prepare(
+        "SELECT id, client_operation_hash AS hash FROM sales WHERE store_id = ? AND client_operation_id = ? AND status = 'completed'"
+      )
+      .get(input.storeId, input.operationId) as { id: string; hash: string } | undefined;
+    if (existing === undefined) return ok(undefined);
+    if (existing.hash !== this.operationHash(input))
+      return err(
+        repositoryError(
+          "REPOSITORY_CONFLICT",
+          "This checkout was already completed with different details. Open Sales History before making another sale."
+        )
+      );
+    return this.getSale(existing.id);
+  }
+
+  private operationHash(input: SaleWrite): string {
+    return createHash("sha256")
+      .update(
+        JSON.stringify({
+          id: input.id ?? null,
+          customerId: input.customerId ?? null,
+          saleDate: input.saleDate,
+          paymentType: input.paymentType,
+          discountMinor: input.discountMinor,
+          taxMinor: input.taxMinor,
+          cashReceivedMinor: input.cashReceivedMinor,
+          items: input.items.map((item) => [
+            item.productId,
+            item.unitId,
+            item.quantity,
+            item.unitPriceMinor,
+            item.discountMinor,
+            item.taxMinor
+          ])
+        })
+      )
+      .digest("hex");
+  }
+
   public saveDraft(input: SaleWrite, status: "draft" | "held"): CoreResult<SaleDetail> {
     return input.id === undefined
       ? this.createSale(input, status)
@@ -345,6 +397,12 @@ export class SaleRepository extends BaseRepository<typeof sales> {
           ? this.createSale(input, "draft")
           : this.updateDraft({ ...input, id: input.id }, "draft");
       if (!draft.ok) return draft;
+      if (input.operationId !== undefined)
+        this.connection.sqlite
+          .prepare(
+            "UPDATE sales SET client_operation_id = ?, client_operation_hash = ? WHERE id = ?"
+          )
+          .run(input.operationId, this.operationHash(input), draft.value.id);
       const validation = this.validateProductsForCompletion(draft.value.items);
       if (!validation.ok) return validation;
       const timestamp = new Date().toISOString();
@@ -457,6 +515,7 @@ export class SaleRepository extends BaseRepository<typeof sales> {
           repositoryError("REPOSITORY_CONFLICT", "Customer credit return requires a customer sale")
         );
       }
+      const originalDocument = sale.value;
       const byItem = new Map(sale.value.items.map((item) => [item.id, item]));
       const lines = input.items
         .map((item) => {
@@ -466,7 +525,11 @@ export class SaleRepository extends BaseRepository<typeof sales> {
           return { requested: item, original, available };
         })
         .filter((line): line is NonNullable<typeof line> => line !== undefined);
-      if (lines.length !== input.items.length || lines.length === 0) {
+      if (
+        lines.length !== input.items.length ||
+        lines.length === 0 ||
+        new Set(input.items.map((item) => item.saleItemId)).size !== input.items.length
+      ) {
         return err(repositoryError("REPOSITORY_CONFLICT", "Return contains invalid sale items"));
       }
       for (const line of lines) {
@@ -483,9 +546,31 @@ export class SaleRepository extends BaseRepository<typeof sales> {
       const returnId = randomUUID();
       const returnNumber = this.nextSaleReturnNumber(input.branchId);
       const totalRefundMinor = lines.reduce(
-        (total, line) => total + line.requested.quantity * line.original.unitPriceMinor,
+        (total, line) =>
+          total +
+          refundForQuantity(
+            originalDocument.totalMinor,
+            originalDocument.items,
+            line.original.id,
+            line.requested.quantity
+          ),
         0
       );
+      const previousCashRefunds = this.money(
+        "SELECT COALESCE(SUM(cash_refund_minor),0) AS amount FROM sales_returns WHERE original_sale_id=? AND status='posted'",
+        originalDocument.id
+      );
+      if (
+        input.refundMethod === "cash" &&
+        totalRefundMinor > originalDocument.paidMinor - previousCashRefunds
+      ) {
+        return err(
+          repositoryError(
+            "REPOSITORY_CONFLICT",
+            "Cash refund exceeds cash collected on this sale. Use customer credit for the unpaid portion."
+          )
+        );
+      }
       const cashRefundMinor = input.refundMethod === "cash" ? totalRefundMinor : 0;
       const receivableReductionMinor =
         input.refundMethod === "customer-credit" ? totalRefundMinor : 0;
@@ -518,7 +603,12 @@ export class SaleRepository extends BaseRepository<typeof sales> {
       for (const line of lines) {
         const restockAction =
           line.requested.condition === "sellable" ? "return-to-stock" : "do-not-restock";
-        const lineTotalMinor = line.requested.quantity * line.original.unitPriceMinor;
+        const lineTotalMinor = refundForQuantity(
+          originalDocument.totalMinor,
+          originalDocument.items,
+          line.original.id,
+          line.requested.quantity
+        );
         this.connection.sqlite
           .prepare(
             `INSERT INTO sales_return_items (
@@ -667,11 +757,11 @@ export class SaleRepository extends BaseRepository<typeof sales> {
   public cashRegisterSummary(businessDayId: string): CoreResult<CashRegisterSummary> {
     try {
       const cashSalesMinor = this.money(
-        "SELECT COALESCE(SUM(paid_minor - COALESCE(change_due_minor, 0)), 0) AS amount FROM sales WHERE business_day_id = ? AND status = 'completed' AND sale_type IN ('cash', 'mixed')",
+        "SELECT COALESCE(SUM(paid_minor), 0) AS amount FROM sales WHERE business_day_id = ? AND status = 'completed' AND sale_type IN ('cash', 'mixed')",
         businessDayId
       );
       const customerPaymentsMinor = this.money(
-        "SELECT COALESCE(SUM(amount_minor), 0) AS amount FROM customer_payments WHERE business_day_id = ? AND status = 'recorded'",
+        "SELECT COALESCE(SUM(cp.amount_minor), 0) AS amount FROM customer_payments cp JOIN payment_methods pm ON pm.id=cp.payment_method_id WHERE cp.business_day_id = ? AND cp.status = 'recorded' AND pm.method_type='cash'",
         businessDayId
       );
       const expensesMinor = this.money(
@@ -685,12 +775,22 @@ export class SaleRepository extends BaseRepository<typeof sales> {
           )
           .get(businessDayId) as CountRow
       ).count;
+      const openingCashMinor = this.money(
+        "SELECT COALESCE(SUM(opening_cash_minor), 0) AS amount FROM cash_sessions WHERE business_day_id = ?",
+        businessDayId
+      );
+      const movementMinor = this.money(
+        `SELECT COALESCE(SUM(le.debit_minor - le.credit_minor), 0) AS amount
+        FROM ledger_entries le JOIN ledger_transactions lt ON lt.id = le.ledger_transaction_id
+        WHERE lt.business_day_id = ? AND lt.status = 'posted' AND le.account_type = 'cash'`,
+        businessDayId
+      );
       return ok({
-        openingCashMinor: 0,
+        openingCashMinor,
         cashSalesMinor,
         customerPaymentsMinor,
         expensesMinor,
-        expectedCashMinor: cashSalesMinor + customerPaymentsMinor - expensesMinor,
+        expectedCashMinor: openingCashMinor + movementMinor,
         salesCount,
         averageSaleMinor: salesCount === 0 ? 0 : Math.round(cashSalesMinor / salesCount)
       });
@@ -705,7 +805,8 @@ export class SaleRepository extends BaseRepository<typeof sales> {
   ): CoreResult<SalesDashboardSummary> {
     try {
       const todayRevenueMinor = this.money(
-        "SELECT COALESCE(SUM(total_minor), 0) AS amount FROM sales WHERE business_day_id = ? AND status = 'completed'",
+        "SELECT (SELECT COALESCE(SUM(total_minor),0) FROM sales WHERE business_day_id=? AND status='completed') - (SELECT COALESCE(SUM(total_refund_minor),0) FROM sales_returns WHERE business_day_id=? AND status='posted') AS amount",
+        businessDayId,
         businessDayId
       );
       const salesCount = (
@@ -715,22 +816,57 @@ export class SaleRepository extends BaseRepository<typeof sales> {
           )
           .get(businessDayId) as CountRow
       ).count;
-      const bestSellingProducts = this.connection.sqlite
+      const rankingRows = this.connection.sqlite
         .prepare(
-          `SELECT p.id AS productId, p.name AS productName,
-                  SUM(si.quantity) AS quantity, SUM(si.line_total_minor) AS revenueMinor
-             FROM sale_items si
-             JOIN sales s ON s.id = si.sale_id
-             JOIN products p ON p.id = si.product_id
-            WHERE s.store_id = ? AND s.business_day_id = ? AND s.status = 'completed'
-            GROUP BY p.id
-            ORDER BY quantity DESC
-            LIMIT 8`
+          `SELECT s.id AS saleId, s.total_minor AS totalMinor, si.id, si.product_id AS productId,
+                p.name AS productName, si.quantity, COALESCE(si.returned_quantity,0) AS returnedQuantity,
+                si.line_total_minor AS lineTotalMinor
+           FROM sale_items si JOIN sales s ON s.id=si.sale_id JOIN products p ON p.id=si.product_id
+          WHERE s.store_id=? AND s.business_day_id=? AND s.status='completed'
+          ORDER BY s.id, si.created_at, si.rowid`
         )
-        .all(storeId, businessDayId) as SalesDashboardSummary["bestSellingProducts"];
+        .all(storeId, businessDayId) as {
+        saleId: string;
+        totalMinor: number;
+        id: string;
+        productId: string;
+        productName: string;
+        quantity: number;
+        returnedQuantity: number;
+        lineTotalMinor: number;
+      }[];
+      const documents = new Map<string, typeof rankingRows>();
+      for (const row of rankingRows) {
+        const lines = documents.get(row.saleId) ?? [];
+        lines.push(row);
+        documents.set(row.saleId, lines);
+      }
+      const productTotals = new Map<
+        string,
+        { productId: string; productName: string; quantity: number; revenueMinor: number }
+      >();
+      for (const lines of documents.values()) {
+        for (const line of lines) {
+          const remaining = line.quantity - line.returnedQuantity;
+          const product = productTotals.get(line.productId) ?? {
+            productId: line.productId,
+            productName: line.productName,
+            quantity: 0,
+            revenueMinor: 0
+          };
+          product.quantity += remaining;
+          product.revenueMinor +=
+            remaining > 0 ? refundForQuantity(line.totalMinor, lines, line.id, remaining) : 0;
+          productTotals.set(line.productId, product);
+        }
+      }
+      const bestSellingProducts = [...productTotals.values()]
+        .filter((product) => product.quantity > 0)
+        .sort((a, b) => b.quantity - a.quantity)
+        .slice(0, 8);
       const bestCustomers = this.connection.sqlite
         .prepare(
-          `SELECT c.id AS customerId, c.name AS customerName, SUM(s.total_minor) AS revenueMinor
+          `SELECT c.id AS customerId, c.name AS customerName, SUM(s.total_minor - COALESCE((SELECT SUM(r.total_refund_minor) FROM sales_returns r WHERE r.original_sale_id=s.id AND r.status='posted'),0)) AS revenueMinor
              FROM sales s
              JOIN customers c ON c.id = s.customer_id
             WHERE s.store_id = ? AND s.business_day_id = ? AND s.status = 'completed'
@@ -1038,15 +1174,22 @@ export class SaleRepository extends BaseRepository<typeof sales> {
              s.cancellation_reason AS metadataJson, s.completed_at AS completedAt,
              s.cancelled_at AS cancelledAt, s.created_at AS createdAt, s.updated_at AS updatedAt,
              s.created_by_user_id AS createdByUserId, u.display_name AS cashierName,
-             COALESCE(items.itemCount, 0) AS itemCount
+             COALESCE(items.itemCount, 0) AS itemCount,
+             CASE WHEN COALESCE(items.returnedCount, 0) = 0 THEN 'none'
+                  WHEN items.remainingCount = 0 THEN 'full' ELSE 'partial' END AS returnStatus,
+             COALESCE(refunds.refundedMinor, 0) AS refundedMinor,
+             s.total_minor - COALESCE(refunds.refundedMinor, 0) AS netTotalMinor
         FROM sales s
         LEFT JOIN customers c ON c.id = s.customer_id
         LEFT JOIN users u ON u.id = s.created_by_user_id
         LEFT JOIN (
-          SELECT sale_id, COUNT(*) AS itemCount
+          SELECT sale_id, COUNT(*) AS itemCount, SUM(CASE WHEN COALESCE(returned_quantity,0)>0 THEN 1 ELSE 0 END) AS returnedCount, SUM(CASE WHEN COALESCE(returned_quantity,0)<quantity THEN 1 ELSE 0 END) AS remainingCount
             FROM sale_items
            GROUP BY sale_id
-        ) items ON items.sale_id = s.id`;
+        ) items ON items.sale_id = s.id
+        LEFT JOIN (SELECT original_sale_id, SUM(total_refund_minor) AS refundedMinor
+                     FROM sales_returns WHERE status='posted' GROUP BY original_sale_id
+                  ) refunds ON refunds.original_sale_id = s.id`;
   }
 
   private saleWhere(query: SaleListQuery): {
@@ -1178,6 +1321,9 @@ export class SaleRepository extends BaseRepository<typeof sales> {
     return {
       id: row.id,
       saleNumber: row.saleNumber,
+      returnStatus: row.returnStatus,
+      refundedMinor: row.refundedMinor,
+      netTotalMinor: row.netTotalMinor,
       customerId: row.customerId,
       customerName: row.customerName,
       saleDate: row.saleDate,

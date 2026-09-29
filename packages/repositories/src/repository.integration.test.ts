@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -28,7 +29,7 @@ const uuid = () => randomUUID() as typeof stores.$inferInsert.id;
 const now = () => new Date().toISOString();
 
 const createTestConnection = (): DatabaseConnection => {
-  const filePath = join("/private/tmp", `orix-repositories-${randomUUID()}.sqlite`);
+  const filePath = join(tmpdir(), `orix-repositories-${randomUUID()}.sqlite`);
   const connection = createDatabaseConnection({ filePath });
   runMigrations(connection, { migrationsFolder: "packages/database/src/migrations" });
   return connection;

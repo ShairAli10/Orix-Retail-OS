@@ -1,3 +1,4 @@
+import { runWithEvents } from "../shared/transactional-events.js";
 import { randomUUID } from "node:crypto";
 import type { ApplicationEvent, CoreError, CoreResult } from "@orix/core";
 import { err, ok } from "@orix/core";
@@ -139,12 +140,14 @@ export class InventoryManagementApplicationService {
     const events = [
       this.event("InventoryAdjusted", transactionId, input.storeId, input.userId, input.occurredAt)
     ];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "inventory.adjust-stock", metadata: { actorId: input.userId } },
       () => Promise.resolve(this.context.repositories.inventory.createTransaction(write))
     );
     const output = result.ok ? ok({ transactionId: result.value }) : result;
-    return this.publishAfterCommit(output, events);
+    return output;
   }
 
   public async recordOpeningStock(
@@ -206,7 +209,9 @@ export class InventoryManagementApplicationService {
     const events = transactionIds.map((id) =>
       this.event("OpeningStockRecorded", id, input.storeId, input.userId, new Date().toISOString())
     );
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "inventory.opening-stock", metadata: { actorId: input.userId } },
       () => {
         for (const write of writes) {
@@ -219,7 +224,7 @@ export class InventoryManagementApplicationService {
       }
     );
     const output = result.ok ? ok({ transactionIds: result.value }) : result;
-    return this.publishAfterCommit(output, events);
+    return output;
   }
 
   public async startStockTake(
@@ -228,7 +233,9 @@ export class InventoryManagementApplicationService {
     const validation = this.validateStockTakeStart(input);
     if (!validation.ok) return validation;
     const events: ApplicationEvent[] = [];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "inventory.stock-take.start", metadata: { actorId: input.userId } },
       () => {
         const stockTake = this.context.repositories.inventory.startStockTake(input);
@@ -245,7 +252,7 @@ export class InventoryManagementApplicationService {
         return Promise.resolve(ok({ stockTake: stockTake.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async completeStockTake(
@@ -254,7 +261,9 @@ export class InventoryManagementApplicationService {
     const validation = this.validateStockTakeComplete(input);
     if (!validation.ok) return validation;
     const events: ApplicationEvent[] = [];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "inventory.stock-take.complete", metadata: { actorId: input.userId } },
       () => {
         const stockTake = this.context.repositories.inventory.completeStockTake(input);
@@ -282,7 +291,7 @@ export class InventoryManagementApplicationService {
         return Promise.resolve(ok({ stockTake: stockTake.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   private validateAdjustment(input: InventoryAdjustmentInput): CoreResult<void> {
@@ -335,21 +344,5 @@ export class InventoryManagementApplicationService {
       payload: { entityId },
       metadata: { storeId, actorId }
     };
-  }
-
-  private async publishAfterCommit<T>(
-    result: CoreResult<T>,
-    events: readonly ApplicationEvent[]
-  ): Promise<CoreResult<T>> {
-    if (!result.ok) {
-      return result;
-    }
-    for (const event of events) {
-      const published = await this.context.eventPublisher.publish(event);
-      if (!published.ok) {
-        return err(published.error);
-      }
-    }
-    return result;
   }
 }

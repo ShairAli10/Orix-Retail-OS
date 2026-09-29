@@ -1,3 +1,4 @@
+import { CounterRepository } from "../counter/counter-repository.js";
 import type { DatabaseConnection } from "@orix/database";
 import { AuditRepository } from "../audit/audit-repository.js";
 import { CustomerRepository } from "../customers/customer-repository.js";
@@ -20,6 +21,7 @@ import { UserRepository } from "../users/user-repository.js";
 export type RepositoryConnection = Pick<DatabaseConnection, "drizzle" | "sqlite">;
 
 export type RepositoryFactory = {
+  readonly counter: CounterRepository;
   readonly customers: CustomerRepository;
   readonly suppliers: SupplierRepository;
   readonly products: ProductRepository;
@@ -38,6 +40,7 @@ export type RepositoryFactory = {
 };
 
 export const createRepositories = (connection: RepositoryConnection): RepositoryFactory => ({
+  counter: new CounterRepository(connection),
   customers: new CustomerRepository(connection),
   suppliers: new SupplierRepository(connection),
   products: new ProductRepository(connection),

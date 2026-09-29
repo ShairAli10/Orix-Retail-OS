@@ -13,3 +13,5 @@ export * from "./settings/settings-repository.js";
 export * from "./shared/index.js";
 export * from "./suppliers/supplier-repository.js";
 export * from "./users/user-repository.js";
+
+export * from "./counter/counter-repository.js";

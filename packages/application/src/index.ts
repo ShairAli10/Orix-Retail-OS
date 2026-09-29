@@ -9,3 +9,5 @@ export * from "./reports/index.js";
 export * from "./sales/index.js";
 export * from "./shared/index.js";
 export * from "./suppliers/index.js";
+
+export * from "./counter/counter-service.js";

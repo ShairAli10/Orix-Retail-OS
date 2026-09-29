@@ -1,3 +1,4 @@
+import { runWithEvents } from "../shared/transactional-events.js";
 import { randomUUID } from "node:crypto";
 import type { ApplicationEvent, CoreError, CoreResult } from "@orix/core";
 import { err, ok } from "@orix/core";
@@ -51,7 +52,9 @@ export class PurchaseManagementApplicationService {
     }
     const events: ApplicationEvent[] = [];
     const timestamp = new Date().toISOString();
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "purchases.save-draft", metadata: { actorId: input.userId } },
       () => {
         const purchase = this.context.repositories.purchases.saveDraft(input);
@@ -67,7 +70,7 @@ export class PurchaseManagementApplicationService {
         return Promise.resolve(ok({ purchase: purchase.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async receivePurchase(input: {
@@ -79,7 +82,9 @@ export class PurchaseManagementApplicationService {
   }): Promise<CoreResult<PurchaseMutationOutput>> {
     const events: ApplicationEvent[] = [];
     const timestamp = new Date().toISOString();
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "purchases.receive", metadata: { actorId: input.userId } },
       () => {
         const purchase = this.context.repositories.purchases.receivePurchase(input);
@@ -89,7 +94,7 @@ export class PurchaseManagementApplicationService {
         return Promise.resolve(ok({ purchase: purchase.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async cancelDraft(input: {
@@ -104,11 +109,13 @@ export class PurchaseManagementApplicationService {
       return err(validationError("Cancellation reason is required.", ["reason"]));
     }
     const events = [this.event("PurchaseCancelled", input.id, input, new Date().toISOString())];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "purchases.cancel", metadata: { actorId: input.userId } },
       () => Promise.resolve(this.context.repositories.purchases.cancelDraft(input))
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async returnPurchase(
@@ -118,7 +125,9 @@ export class PurchaseManagementApplicationService {
     if (!validation.ok) return validation;
     const events: ApplicationEvent[] = [];
     const timestamp = new Date().toISOString();
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "purchases.return", metadata: { actorId: input.userId } },
       () => {
         const purchaseReturn = this.context.repositories.purchases.returnPurchase(input);
@@ -129,7 +138,7 @@ export class PurchaseManagementApplicationService {
         return Promise.resolve(ok({ return: purchaseReturn.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   private validatePurchase(input: PurchaseWrite): CoreResult<void> {
@@ -168,17 +177,6 @@ export class PurchaseManagementApplicationService {
           validationError("Purchase return details are missing or invalid.", [...new Set(fields)])
         )
       : ok(undefined);
-  }
-
-  private async publishAfterCommit<T>(
-    result: CoreResult<T>,
-    events: readonly ApplicationEvent[]
-  ): Promise<CoreResult<T>> {
-    if (!result.ok) return result;
-    for (const event of events) {
-      await this.context.eventPublisher.publish(event);
-    }
-    return result;
   }
 
   private event(

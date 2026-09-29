@@ -1,3 +1,4 @@
+import { runWithEvents } from "../shared/transactional-events.js";
 import { randomUUID } from "node:crypto";
 import type { ApplicationEvent, CoreError, CoreResult } from "@orix/core";
 import { err, ok } from "@orix/core";
@@ -63,7 +64,9 @@ export class SupplierManagementApplicationService {
     if (!uniqueness.ok) return uniqueness;
     const events: ApplicationEvent[] = [];
     const timestamp = new Date().toISOString();
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "suppliers.create", metadata: { actorId: input.userId } },
       () => {
         const supplier = this.context.repositories.suppliers.createSupplier(input);
@@ -77,7 +80,7 @@ export class SupplierManagementApplicationService {
         return Promise.resolve(ok({ supplier: supplier.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async updateSupplier(
@@ -89,7 +92,9 @@ export class SupplierManagementApplicationService {
     if (!uniqueness.ok) return uniqueness;
     const events: ApplicationEvent[] = [];
     const timestamp = new Date().toISOString();
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "suppliers.update", metadata: { actorId: input.userId } },
       () => {
         const supplier = this.context.repositories.suppliers.updateSupplier(input);
@@ -98,7 +103,7 @@ export class SupplierManagementApplicationService {
         return Promise.resolve(ok({ supplier: supplier.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async archiveSupplier(input: {
@@ -109,11 +114,13 @@ export class SupplierManagementApplicationService {
     readonly userId: string;
   }): Promise<CoreResult<void>> {
     const events = [this.event("SupplierArchived", input.id, input, new Date().toISOString())];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "suppliers.archive", metadata: { actorId: input.userId } },
       () => Promise.resolve(this.context.repositories.suppliers.archiveSupplier(input))
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async restoreSupplier(input: {
@@ -124,11 +131,13 @@ export class SupplierManagementApplicationService {
     readonly userId: string;
   }): Promise<CoreResult<void>> {
     const events = [this.event("SupplierRestored", input.id, input, new Date().toISOString())];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "suppliers.restore", metadata: { actorId: input.userId } },
       () => Promise.resolve(this.context.repositories.suppliers.restoreSupplier(input))
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async recordPayment(
@@ -143,7 +152,9 @@ export class SupplierManagementApplicationService {
       return err(operationError("Supplier was not found or is archived."));
     }
     const events: ApplicationEvent[] = [];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "suppliers.payment.record", metadata: { actorId: input.userId } },
       () => {
         const payment = this.context.repositories.suppliers.recordPayment(input);
@@ -152,7 +163,7 @@ export class SupplierManagementApplicationService {
         return Promise.resolve(ok({ payment: payment.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   private validateSupplier(input: SupplierWrite): CoreResult<void> {
@@ -177,17 +188,6 @@ export class SupplierManagementApplicationService {
     return exists.value
       ? err(validationError("A supplier with this phone already exists.", ["phone"]))
       : ok(undefined);
-  }
-
-  private async publishAfterCommit<T>(
-    result: CoreResult<T>,
-    events: readonly ApplicationEvent[]
-  ): Promise<CoreResult<T>> {
-    if (!result.ok) return result;
-    for (const event of events) {
-      await this.context.eventPublisher.publish(event);
-    }
-    return result;
   }
 
   private event(

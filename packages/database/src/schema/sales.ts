@@ -25,6 +25,8 @@ export const sales = sqliteTable(
     branchId: requiredUuidColumn("branch_id").references(() => branches.id),
     businessDayId: requiredUuidColumn("business_day_id").references(() => businessDays.id),
     customerId: uuidColumn("customer_id").references(() => customers.id),
+    clientOperationId: text("client_operation_id"),
+    clientOperationHash: text("client_operation_hash"),
     saleNumber: text("sale_number").notNull(),
     saleType: text("sale_type").notNull().default("cash"),
     status: text("status").notNull().default("draft"),
@@ -50,6 +52,10 @@ export const sales = sqliteTable(
     branchSaleNumberUnique: uniqueIndex("sales_branch_sale_number_unique").on(
       table.branchId,
       table.saleNumber
+    ),
+    storeOperationUnique: uniqueIndex("sales_store_operation_unique").on(
+      table.storeId,
+      table.clientOperationId
     ),
     businessDayStatusIdx: index("sales_day_status_idx").on(table.businessDayId, table.status),
     customerDateIdx: index("sales_customer_date_idx").on(table.customerId, table.saleDate),

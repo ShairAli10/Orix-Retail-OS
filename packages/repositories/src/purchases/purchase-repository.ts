@@ -1,3 +1,4 @@
+import { refundForQuantity } from "../shared/refund-allocation.js";
 import { randomUUID } from "node:crypto";
 import { purchases } from "@orix/database";
 import type { CoreResult } from "@orix/core";
@@ -429,6 +430,7 @@ export class PurchaseRepository extends BaseRepository<typeof purchases> {
           repositoryError("REPOSITORY_CONFLICT", "Only received purchases can be returned")
         );
       }
+      const originalDocument = purchase.value;
       const byItem = new Map(purchase.value.items.map((item) => [item.id, item]));
       const lines = input.items
         .map((item) => {
@@ -438,7 +440,11 @@ export class PurchaseRepository extends BaseRepository<typeof purchases> {
           return { requested: item, original, available };
         })
         .filter((line): line is NonNullable<typeof line> => line !== undefined);
-      if (lines.length !== input.items.length || lines.length === 0) {
+      if (
+        lines.length !== input.items.length ||
+        lines.length === 0 ||
+        new Set(input.items.map((item) => item.purchaseItemId)).size !== input.items.length
+      ) {
         return err(
           repositoryError("REPOSITORY_CONFLICT", "Return contains invalid purchase items")
         );
@@ -466,7 +472,16 @@ export class PurchaseRepository extends BaseRepository<typeof purchases> {
       const returnId = randomUUID();
       const returnNumber = this.nextPurchaseReturnNumber(input.branchId);
       const totalValueMinor = lines.reduce(
-        (total, line) => total + line.requested.quantity * line.original.unitCostMinor,
+        (total, line) =>
+          total +
+          refundForQuantity(
+            originalDocument.totalMinor -
+              originalDocument.freightMinor -
+              originalDocument.otherChargesMinor,
+            originalDocument.items,
+            line.original.id,
+            line.requested.quantity
+          ),
         0
       );
       this.connection.sqlite
@@ -494,7 +509,14 @@ export class PurchaseRepository extends BaseRepository<typeof purchases> {
           input.userId
         );
       for (const line of lines) {
-        const lineTotalMinor = line.requested.quantity * line.original.unitCostMinor;
+        const lineTotalMinor = refundForQuantity(
+          originalDocument.totalMinor -
+            originalDocument.freightMinor -
+            originalDocument.otherChargesMinor,
+          originalDocument.items,
+          line.original.id,
+          line.requested.quantity
+        );
         this.connection.sqlite
           .prepare(
             `INSERT INTO purchase_return_items (

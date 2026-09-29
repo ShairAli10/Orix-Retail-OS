@@ -72,11 +72,11 @@ export const routes: readonly {
   },
   {
     id: "expenses",
-    label: "Expenses",
+    label: "Counter & Expenses",
     icon: "EX",
     path: "/expenses",
     section: "operations",
-    ready: false
+    ready: true
   },
   {
     id: "reports",

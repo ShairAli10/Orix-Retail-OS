@@ -1,16 +1,26 @@
+import { createDiagnostics } from "./diagnostics/bootstrap.js";
+import type { Diagnostics } from "./diagnostics/diagnostics.js";
+import { migrateWithSafetyBackup } from "./diagnostics/upgrade.js";
+import type { DiagnosticsReportContract } from "@orix/electron";
+import { SqliteTransactionRunner, PersistedEventPublisher } from "./sqlite-runtime.js";
+import { LoginLimiter } from "./login-limiter.js";
+import { businessDate, businessDateRange } from "./business-time.js";
+import { stageDatabaseRestore, replaceWithStagedRestore } from "./backup-restore.js";
+import { CounterService } from "@orix/application";
+import type {
+  CounterOpenContract,
+  CounterCloseContract,
+  CounterExpenseContract
+} from "@orix/electron";
+import { verifyDatabaseBackup } from "./backup-verification.js";
+import { channelPermissions, SerialOperations, validIpcRequest } from "./ipc-policy.js";
 import { pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, stat } from "node:fs/promises";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type {
-  ApplicationEvent,
-  CoreError,
-  CoreResult,
-  EventPublisher,
-  TransactionContext
-} from "@orix/core";
-import { err, ok } from "@orix/core";
+import type { CoreError, CoreResult } from "@orix/core";
+import { ok } from "@orix/core";
 import {
   CustomerManagementApplicationService,
   InventoryManagementApplicationService,
@@ -116,13 +126,7 @@ import { createRepositories, type CatalogItem, type RepositoryFactory } from "@o
 import { err as ipcErr, ok as ipcOk, type Result } from "@orix/shared";
 import type * as Electron from "electron";
 import type { BrowserWindow as BrowserWindowType } from "electron";
-import {
-  buildBackupFileName,
-  buildBackupNumber,
-  calculateFileChecksum,
-  verificationFailed,
-  verificationOk
-} from "./backup-utils.js";
+import { buildBackupFileName, buildBackupNumber, calculateFileChecksum } from "./backup-utils.js";
 
 type ElectronMainRuntime = Pick<typeof Electron, "app" | "BrowserWindow" | "dialog" | "ipcMain">;
 
@@ -136,7 +140,101 @@ if (electronRuntime === undefined) {
   throw new Error("Electron runtime was not initialized.");
 }
 
-const { app, BrowserWindow, dialog, ipcMain } = electronRuntime;
+const { app, BrowserWindow, dialog, ipcMain: rawIpcMain } = electronRuntime;
+const diagnostics =
+  (globalThis as typeof globalThis & { __orixDiagnostics?: Diagnostics }).__orixDiagnostics ??
+  createDiagnostics(app.getPath("userData"), app.getAppPath(), app.getVersion());
+const operations = new SerialOperations();
+const loginLimiter = new LoginLimiter();
+let restarting = false;
+const ipcMain: Pick<typeof rawIpcMain, "handle"> = {
+  handle(channel, listener) {
+    rawIpcMain.handle(channel, (event, request: unknown) =>
+      operations.run(async () => {
+        try {
+          if (restarting) return appFail("Application is restarting after restore. Please wait.");
+          const state = appState;
+          if (state === undefined || !validIpcRequest(request)) return appFail("Invalid request.");
+          const sender = event.senderFrame?.url;
+          const expected = new URL("../renderer/index.html", import.meta.url);
+          if (sender === undefined || new URL(sender).href.split("#")[0] !== expected.href)
+            return appFail("Untrusted request source.");
+          const policy = channelPermissions[channel.replace("orix:", "")];
+          if (policy === undefined) return appFail("Operation is not available.");
+          if (policy !== "public") {
+            if (state.locked || !setupCompleted(state.connection, state.storeId))
+              return appFail("Sign in is required.");
+            const permissions = permissionsForUser(state.connection, state.storeId, state.userId);
+            if (permissions.length === 0 || (policy !== "session" && !permissions.includes(policy)))
+              return appFail("You do not have permission for this action.");
+          }
+          if (policy !== "public") {
+            state.businessDayId = ensureBusinessDay(
+              state.connection,
+              state.storeId,
+              state.branchId,
+              state.userId,
+              new Date().toISOString()
+            );
+          }
+          const moneyChannels = [
+            "orix:sales.complete",
+            "orix:sales.return",
+            "orix:purchases.receive",
+            "orix:purchases.return",
+            "orix:customers.payment.record",
+            "orix:suppliers.payment.record"
+          ];
+          if (
+            moneyChannels.includes(channel) &&
+            state.repositories.counter.session(state.businessDayId)?.status !== "open"
+          ) {
+            const completed =
+              channel === "orix:sales.complete" && typeof request.payload.operationId === "string"
+                ? state.connection.sqlite
+                    .prepare(
+                      "SELECT id FROM sales WHERE store_id=? AND client_operation_id=? AND status='completed'"
+                    )
+                    .get(state.storeId, request.payload.operationId)
+                : undefined;
+            if (completed === undefined)
+              return appFail(
+                "Open the counter in Counter & Expenses before recording transactions."
+              );
+          }
+          if (channel === "orix:auth.login" || channel === "orix:auth.unlock") {
+            const username =
+              channel === "orix:auth.login"
+                ? (typeof request.payload.username === "string" ? request.payload.username : "")
+                    .trim()
+                    .toLowerCase()
+                : undefined;
+            const key =
+              username === undefined
+                ? state.userId
+                : (findLoginUser(state.connection, state.storeId, username)?.id ?? username);
+            if (!loginLimiter.allowed(key))
+              return appFail("Too many attempts. Wait one minute before trying again.");
+            const result = await (listener(event, request) as Promise<{ ok: boolean }>);
+            if (result.ok) loginLimiter.succeeded(key);
+            else loginLimiter.failed(key);
+            return result;
+          }
+          const result = await (listener(event, request) as Promise<{
+            ok?: boolean;
+            error?: unknown;
+          }>);
+          if (result.ok === false && !channel.startsWith("orix:auth."))
+            diagnostics.record("operation-failed", result.error);
+          return result;
+        } catch (cause) {
+          diagnostics.record("operation-failed", cause);
+          return appFail("The operation could not be completed. Please try again.");
+        }
+      })
+    );
+  }
+};
 
 const isSmokeRun = process.argv.includes("--smoke");
 const settingsEffectiveAt = "1970-01-01T00:00:00.000Z";
@@ -153,7 +251,7 @@ type AppState = {
   readonly saleService: SaleManagementApplicationService;
   readonly storeId: string;
   readonly branchId: string;
-  readonly businessDayId: string;
+  businessDayId: string;
   userId: string;
   locked: boolean;
   rememberedUsername: string | null;
@@ -215,6 +313,8 @@ type RecentActivityRow = {
 };
 
 type DailySalesReportRow = {
+  readonly refundedMinor: number;
+  readonly netTotalMinor: number;
   readonly saleId: string;
   readonly saleNumber: string;
   readonly saleDate: string;
@@ -254,11 +354,6 @@ type PayableReportRow = {
   readonly phone: string | null;
   readonly balanceMinor: number;
   readonly lastActivityAt: string | null;
-};
-
-type CashSessionReportRow = {
-  readonly openingCashMinor: number | null;
-  readonly status: "open" | "closed" | null;
 };
 
 const defaultSettings: AppSettingsDto = {
@@ -301,6 +396,7 @@ const allPermissions = [
   "sales.return",
   "sales.print",
   "expenses.view",
+  "expenses.manage",
   "reports.view",
   "settings.view",
   "settings.manage",
@@ -313,6 +409,7 @@ const rolePermissionMap = {
   Owner: allPermissions,
   Manager: allPermissions.filter((permission) => permission !== "settings.manage"),
   Cashier: [
+    "expenses.view",
     "dashboard.view",
     "pos.view",
     "products.view",
@@ -373,89 +470,11 @@ const rolePermissionMap = {
 
 const roleNames = Object.keys(rolePermissionMap) as readonly RoleName[];
 
-class SqliteTransactionRunner {
-  public constructor(private readonly connection: DatabaseConnection) {}
-
-  public async run<T>(
-    options: { readonly name: string; readonly metadata?: Readonly<Record<string, unknown>> },
-    scope: (transaction: TransactionContext) => Promise<CoreResult<T>>
-  ): Promise<CoreResult<T>> {
-    const transaction: TransactionContext = {
-      id: randomUUID(),
-      depth: 0,
-      isolationLevel: "immediate",
-      metadata: { name: options.name, ...(options.metadata ?? {}) }
-    };
-
-    try {
-      this.connection.sqlite.prepare("BEGIN IMMEDIATE").run();
-      const result = await scope(transaction);
-      if (result.ok) {
-        this.connection.sqlite.prepare("COMMIT").run();
-      } else {
-        this.connection.sqlite.prepare("ROLLBACK").run();
-      }
-      return result;
-    } catch (cause) {
-      this.connection.sqlite.prepare("ROLLBACK").run();
-      return err({
-        code: "APPLICATION_TRANSACTION_FAILED",
-        message: "Transaction failed.",
-        severity: "error",
-        cause
-      });
-    }
-  }
-}
-
-class PersistedEventPublisher implements EventPublisher {
-  public constructor(private readonly connection: DatabaseConnection) {}
-
-  public publish(event: ApplicationEvent): Promise<CoreResult<void>> {
-    try {
-      const sourceId = this.extractEntityId(event);
-      this.connection.sqlite
-        .prepare(
-          `INSERT INTO business_events (
-            id, store_id, branch_id, event_name, source_type, source_id,
-            payload_summary_json, occurred_at, created_at, created_by_user_id
-          ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          event.id,
-          String(event.metadata.storeId),
-          event.name,
-          event.name,
-          sourceId,
-          JSON.stringify(event.payload),
-          event.occurredAt,
-          new Date().toISOString(),
-          typeof event.metadata.actorId === "string" ? event.metadata.actorId : null
-        );
-      return Promise.resolve(ok(undefined));
-    } catch (cause) {
-      return Promise.resolve(
-        err({
-          code: "APPLICATION_EVENT_PUBLISH_FAILED",
-          message: "Failed to persist business event.",
-          severity: "error",
-          cause
-        })
-      );
-    }
-  }
-
-  private extractEntityId(event: ApplicationEvent): string {
-    const payload = event.payload as Readonly<Record<string, unknown>>;
-    return typeof payload.entityId === "string" ? payload.entityId : event.id;
-  }
-}
-
 const createMainWindow = (): BrowserWindowType => {
   const window = new BrowserWindow({
     width: 1366,
     height: 768,
-    minWidth: 1100,
+    minWidth: 800,
     minHeight: 680,
     show: !isSmokeRun,
     title: "Orix Retail OS",
@@ -474,15 +493,56 @@ const createMainWindow = (): BrowserWindowType => {
     void window.loadFile(join(fileURLToPath(new URL("../renderer/index.html", import.meta.url))));
   }
 
+  window.webContents.on("render-process-gone", (_event, details) => {
+    diagnostics.record("renderer-crashed", {
+      code: details.reason === "oom" ? "E_RENDERER_OOM" : "E_RENDERER_CRASH"
+    });
+    void dialog
+      .showMessageBox({
+        type: "error",
+        title: "Orix stopped unexpectedly",
+        message:
+          "The checkout window stopped. Restart Orix, then check Sales History before retrying a payment. The owner can export diagnostics from Settings.",
+        buttons: ["Restart Orix", "Close"],
+        defaultId: 0,
+        cancelId: 1
+      })
+      .then((result) => {
+        if (result.response === 0) app.relaunch();
+        app.exit(1);
+      });
+  });
+  window.on("unresponsive", () => {
+    diagnostics.record("renderer-unresponsive");
+  });
+  window.on("responsive", () => {
+    diagnostics.record("renderer-responsive");
+  });
+  window.webContents.on("did-fail-load", () => {
+    diagnostics.record("startup-failed");
+  });
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", (event) => {
+    event.preventDefault();
+  });
   return window;
 };
 
-const initializeAppState = (): AppState => {
+const initializeAppState = async (): Promise<AppState> => {
   const dbPath = join(app.getPath("userData"), "orix-retail-os.sqlite");
   const connection = createDatabaseConnection({ filePath: dbPath });
-  runMigrations(connection, {
-    migrationsFolder: resolveMigrationsFolder()
-  });
+  diagnostics.record("migration-start");
+  try {
+    const migrationsFolder = resolveMigrationsFolder();
+    await migrateWithSafetyBackup(connection, migrationsFolder, app.getPath("userData"), () => {
+      runMigrations(connection, { migrationsFolder });
+    });
+    diagnostics.record("migration-complete");
+  } catch (cause) {
+    diagnostics.record("migration-failed", cause);
+    connection.close();
+    throw cause;
+  }
   const bootstrap = ensureBootstrapData(connection);
   seedRolesAndPermissions(
     connection,
@@ -622,10 +682,17 @@ const ensureBusinessDay = (
   userId: string,
   timestamp: string
 ): string => {
-  const businessDate = timestamp.slice(0, 10);
+  // Keep an overnight open session attached to its original trading day until reconciled.
+  const openSession = connection.sqlite
+    .prepare(
+      `SELECT bd.id FROM business_days bd JOIN cash_sessions cs ON cs.business_day_id=bd.id WHERE bd.branch_id=? AND cs.status='open' ORDER BY cs.opened_at DESC LIMIT 1`
+    )
+    .get(branchId) as { id: string } | undefined;
+  if (openSession) return openSession.id;
+  const localDate = businessDate(timestamp, storeProfile(connection, storeId).timezone);
   const existing = connection.sqlite
     .prepare("SELECT id FROM business_days WHERE branch_id = ? AND business_date = ? LIMIT 1")
-    .get(branchId, businessDate) as { readonly id: string } | undefined;
+    .get(branchId, localDate) as { readonly id: string } | undefined;
   if (existing !== undefined) {
     return existing.id;
   }
@@ -636,7 +703,7 @@ const ensureBusinessDay = (
         id, store_id, branch_id, business_date, status, opened_at, opened_by_user_id, created_at
       ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?)`
     )
-    .run(id, storeId, branchId, businessDate, timestamp, userId, timestamp);
+    .run(id, storeId, branchId, localDate, timestamp, userId, timestamp);
   return id;
 };
 
@@ -1075,6 +1142,57 @@ const moneyAmount = (connection: DatabaseConnection, sql: string, ...params: rea
 const countAmount = (connection: DatabaseConnection, sql: string, ...params: readonly string[]) =>
   (connection.sqlite.prepare(sql).get(...params) as CountRow | undefined)?.count ?? 0;
 
+const registerCounterHandlers = (state: AppState): void => {
+  const service = new CounterService({
+    repositories: state.repositories,
+    transactionRunner: new SqliteTransactionRunner(state.connection),
+    eventPublisher: new PersistedEventPublisher(state.connection)
+  });
+  const response = <T>(result: CoreResult<T>): Result<T, AppIpcError> =>
+    result.ok ? appOk(result.value) : appFail(result.error.message);
+  ipcMain.handle("orix:counter.summary", () => response(service.summary(state)));
+  ipcMain.handle("orix:counter.open", async (_event, request: CounterOpenContract["request"]) => {
+    state.businessDayId = ensureBusinessDay(
+      state.connection,
+      state.storeId,
+      state.branchId,
+      state.userId,
+      new Date().toISOString()
+    );
+    return response(await service.open(state, request.payload.openingCashMinor));
+  });
+  ipcMain.handle("orix:counter.close", async (_event, request: CounterCloseContract["request"]) => {
+    const closed = await service.close(
+      state,
+      request.payload.countedCashMinor,
+      request.payload.reason
+    );
+    if (!closed.ok) return response(closed);
+    try {
+      await createVerifiedBackup(state);
+      return response(closed);
+    } catch {
+      return appOk({
+        ...closed.value,
+        backupWarning:
+          "Counter closed, but the backup failed. Create a backup from Settings before leaving the store."
+      });
+    }
+  });
+  ipcMain.handle(
+    "orix:counter.expense",
+    async (_event, request: CounterExpenseContract["request"]) =>
+      response(
+        await service.expense(
+          state,
+          request.payload.amountMinor,
+          request.payload.description,
+          request.payload.operationId
+        )
+      )
+  );
+};
+
 const registerAuthHandlers = (state: AppState): void => {
   ipcMain.handle("orix:auth.status", (): AuthStatusContract["response"] =>
     appOk(authStatus(state))
@@ -1083,6 +1201,8 @@ const registerAuthHandlers = (state: AppState): void => {
   ipcMain.handle(
     "orix:setup.store",
     (_event, request: SetupStoreContract["request"]): SetupStoreContract["response"] => {
+      if (setupCompleted(state.connection, state.storeId))
+        return appFail("Store setup is already complete.");
       const payload = request.payload;
       const validationError = validateSetup(payload);
       if (validationError !== null) {
@@ -1235,6 +1355,8 @@ const registerAuthHandlers = (state: AppState): void => {
     "orix:auth.unlock",
     (_event, request: UnlockContract["request"]): UnlockContract["response"] => {
       try {
+        if (permissionsForUser(state.connection, state.storeId, state.userId).length === 0)
+          return appFail("This user is disabled.");
         const credentials = credentialForUser(state.connection, state.storeId, state.userId);
         if (credentials === undefined) {
           return appFail("Current user does not have credentials.");
@@ -1306,79 +1428,101 @@ const registerUserHandlers = (state: AppState): void => {
         return appFail("You do not have permission to manage users.");
       }
       try {
-        const payload = request.payload;
-        const timestamp = new Date().toISOString();
-        if (payload.fullName.trim().length < 2 || payload.username.trim().length < 3) {
-          return appFail("Full name and username are required.");
-        }
-        if (payload.roleNames.length === 0) {
-          return appFail("Select at least one role.");
-        }
-        const userId = payload.id ?? randomUUID();
-        const status = payload.status === "active" ? "active" : "inactive";
-        if (payload.id === undefined) {
-          if (payload.password === undefined || payload.password.length < 8) {
-            return appFail("Password must be at least 8 characters.");
+        return state.connection.sqlite.transaction((): UserSaveContract["response"] => {
+          const payload = request.payload;
+          const timestamp = new Date().toISOString();
+          if (payload.fullName.trim().length < 2 || payload.username.trim().length < 3) {
+            return appFail("Full name and username are required.");
           }
-          if (payload.pin === undefined || !/^\d{4}$/.test(payload.pin)) {
-            return appFail("PIN must be exactly 4 digits.");
+          if (payload.roleNames.length === 0) {
+            return appFail("Select at least one role.");
           }
-          state.connection.sqlite
-            .prepare(
-              `INSERT INTO users (id, store_id, display_name, username, status, created_at, updated_at, created_by_user_id, updated_by_user_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            )
-            .run(
-              userId,
+          if (payload.roleNames.some((role) => !roleNames.includes(role)))
+            return appFail("Unknown role.");
+          const actorIsOwner = roleNamesForUser(state.connection, state.userId).includes("Owner");
+          const targetIsOwner =
+            payload.id !== undefined &&
+            roleNamesForUser(state.connection, payload.id).includes("Owner");
+          if (!actorIsOwner && (targetIsOwner || payload.roleNames.includes("Owner")))
+            return appFail("Only an owner can manage owner accounts.");
+          if (
+            targetIsOwner &&
+            (payload.status !== "active" || !payload.roleNames.includes("Owner"))
+          ) {
+            const otherOwners = countAmount(
+              state.connection,
+              `SELECT COUNT(DISTINCT u.id) AS count FROM users u JOIN user_roles ur ON ur.user_id=u.id AND ur.revoked_at IS NULL JOIN roles r ON r.id=ur.role_id WHERE u.store_id=? AND u.status='active' AND r.name='Owner' AND u.id<>?`,
               state.storeId,
-              payload.fullName.trim(),
-              payload.username.trim(),
-              status,
-              timestamp,
-              timestamp,
-              state.userId,
-              state.userId
+              payload.id ?? ""
             );
-          upsertSetting(
+            if (otherOwners === 0) return appFail("Keep at least one active owner account.");
+          }
+          const userId = payload.id ?? randomUUID();
+          const status = payload.status === "active" ? "active" : "inactive";
+          if (payload.id === undefined) {
+            if (payload.password === undefined || payload.password.length < 8) {
+              return appFail("Password must be at least 8 characters.");
+            }
+            if (payload.pin === undefined || !/^\d{4}$/.test(payload.pin)) {
+              return appFail("PIN must be exactly 4 digits.");
+            }
+            state.connection.sqlite
+              .prepare(
+                `INSERT INTO users (id, store_id, display_name, username, status, created_at, updated_at, created_by_user_id, updated_by_user_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              )
+              .run(
+                userId,
+                state.storeId,
+                payload.fullName.trim(),
+                payload.username.trim(),
+                status,
+                timestamp,
+                timestamp,
+                state.userId,
+                state.userId
+              );
+            upsertSetting(
+              state.connection,
+              state.storeId,
+              `auth.credentials.${userId}`,
+              createCredentialRecord(payload.password, payload.pin),
+              "auth",
+              state.userId,
+              true
+            );
+          } else {
+            state.connection.sqlite
+              .prepare(
+                "UPDATE users SET display_name = ?, username = ?, status = ?, updated_at = ?, updated_by_user_id = ? WHERE id = ? AND store_id = ?"
+              )
+              .run(
+                payload.fullName.trim(),
+                payload.username.trim(),
+                status,
+                timestamp,
+                state.userId,
+                userId,
+                state.storeId
+              );
+          }
+          seedRolesAndPermissions(state.connection, state.storeId, state.userId, timestamp);
+          assignRoles(
             state.connection,
             state.storeId,
-            `auth.credentials.${userId}`,
-            createCredentialRecord(payload.password, payload.pin),
-            "auth",
+            userId,
+            payload.roleNames,
             state.userId,
-            true
+            timestamp
           );
-        } else {
-          state.connection.sqlite
+          const row = state.connection.sqlite
             .prepare(
-              "UPDATE users SET display_name = ?, username = ?, status = ?, updated_at = ?, updated_by_user_id = ? WHERE id = ? AND store_id = ?"
-            )
-            .run(
-              payload.fullName.trim(),
-              payload.username.trim(),
-              status,
-              timestamp,
-              state.userId,
-              userId,
-              state.storeId
-            );
-        }
-        seedRolesAndPermissions(state.connection, state.storeId, state.userId, timestamp);
-        assignRoles(
-          state.connection,
-          state.storeId,
-          userId,
-          payload.roleNames,
-          state.userId,
-          timestamp
-        );
-        const row = state.connection.sqlite
-          .prepare(
-            `SELECT id, display_name AS displayName, username, status, last_login_at AS lastLoginAt, created_at AS createdAt
+              `SELECT id, display_name AS displayName, username, status, last_login_at AS lastLoginAt, created_at AS createdAt
              FROM users WHERE id = ?`
-          )
-          .get(userId) as UserRow;
-        return appOk({ user: mapUser(state.connection, row) });
+            )
+            .get(userId) as UserRow;
+          return appOk({ user: mapUser(state.connection, row) });
+        })();
       } catch {
         return appFail("Unable to save user. Username may already exist.");
       }
@@ -1394,6 +1538,15 @@ const registerUserHandlers = (state: AppState): void => {
         return appFail("You do not have permission to reset credentials.");
       }
       const payload: ResetSecretPayload = request.payload;
+      if (
+        roleNamesForUser(state.connection, payload.userId).includes("Owner") &&
+        !roleNamesForUser(state.connection, state.userId).includes("Owner")
+      )
+        return appFail("Only an owner can reset owner credentials.");
+      if (payload.password === undefined && payload.pin === undefined)
+        return appFail("Provide a new password or PIN.");
+      if (credentialForUser(state.connection, state.storeId, payload.userId) === undefined)
+        return appFail("User credentials were not found.");
       if (payload.password !== undefined && payload.password.length < 8) {
         return appFail("Password must be at least 8 characters.");
       }
@@ -1582,41 +1735,16 @@ const publishBackupEvent = async (
   });
 };
 
-const verifyBackupFile = (filePath: string): BackupVerifyContract["response"] => {
-  try {
-    if (!existsSync(filePath)) {
-      return appOk(verificationFailed("Backup file was not found."));
-    }
-    const readonlyConnection = createDatabaseConnection({
-      filePath,
-      mode: "readonly",
-      enableWal: false
-    });
-    try {
-      const integrity = readonlyConnection.sqlite.prepare("PRAGMA integrity_check").get() as
-        { readonly integrity_check?: string } | undefined;
-      if (integrity?.integrity_check !== "ok") {
-        return appOk(verificationFailed("SQLite integrity check failed."));
-      }
-      const storeCount = countAmount(readonlyConnection, "SELECT COUNT(*) AS count FROM stores");
-      if (storeCount < 1) {
-        return appOk(verificationFailed("Backup does not contain store data."));
-      }
-      return appOk(verificationOk("Backup is valid and restorable."));
-    } finally {
-      readonlyConnection.close();
-    }
-  } catch {
-    return appOk(verificationFailed("Backup could not be opened as an Orix database."));
-  }
-};
+const verifyBackupFile = (filePath: string): BackupVerifyContract["response"] =>
+  appOk(verifyDatabaseBackup(filePath, resolveMigrationsFolder()));
 
 const createVerifiedBackup = async (state: AppState): Promise<BackupRecordDto> => {
   const startedAt = new Date();
-  const backupNumber = buildBackupNumber(startedAt);
+  const backupSuffix = randomUUID().slice(0, 8);
+  const backupNumber = `${buildBackupNumber(startedAt)}-${backupSuffix}`;
   const backupLocation = backupLocationFor(state);
   await mkdir(backupLocation, { recursive: true });
-  const fileName = buildBackupFileName(startedAt);
+  const fileName = buildBackupFileName(startedAt).replace(".sqlite", `-${backupSuffix}.sqlite`);
   const filePath = join(backupLocation, fileName);
   const backupId = randomUUID();
   const timestamp = startedAt.toISOString();
@@ -1646,8 +1774,9 @@ const createVerifiedBackup = async (state: AppState): Promise<BackupRecordDto> =
     const fileStats = await stat(filePath);
     const checksum = await calculateFileChecksum(filePath);
     const verification = verifyBackupFile(filePath);
-    const verifiedAt =
-      verification.ok && verification.value.valid ? verification.value.checkedAt : null;
+    if (!verification.ok || !verification.value.valid)
+      throw new Error("Created backup failed verification.");
+    const verifiedAt = verification.value.checkedAt;
     const completedAt = new Date().toISOString();
     state.connection.sqlite
       .prepare(
@@ -1693,6 +1822,59 @@ const createVerifiedBackup = async (state: AppState): Promise<BackupRecordDto> =
   }
 };
 
+const registerDiagnosticsHandlers = (state: AppState): void => {
+  ipcMain.handle("orix:diagnostics.status", () => appOk(diagnostics.status()));
+  ipcMain.handle("orix:diagnostics.notice", () => {
+    const status = diagnostics.status();
+    return appOk({
+      previousUncleanShutdown: status.previousUncleanShutdown,
+      loggingAvailable: status.loggingAvailable
+    });
+  });
+  let reportWindow = 0;
+  let reports = 0;
+  ipcMain.handle(
+    "orix:diagnostics.report",
+    (_event, request: DiagnosticsReportContract["request"]) => {
+      if (Date.now() - reportWindow > 60000) {
+        reportWindow = Date.now();
+        reports = 0;
+      }
+      if (
+        reports++ >= 20 ||
+        !["error", "react", "unhandled-rejection"].includes(request.payload.kind)
+      )
+        return appOk({ recorded: false });
+      diagnostics.record("renderer-error", {
+        name: request.payload.name,
+        stack: request.payload.stack
+      });
+      return appOk({ recorded: true });
+    }
+  );
+  ipcMain.handle("orix:diagnostics.export", async () => {
+    const destination = await dialog.showSaveDialog({
+      title: "Export Orix diagnostics",
+      defaultPath: `Orix-diagnostics-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`,
+      filters: [{ name: "Diagnostics ZIP", extensions: ["zip"] }]
+    });
+    if (destination.canceled) return appOk({ filePath: null });
+    if (!destination.filePath.toLowerCase().endsWith(".zip"))
+      return appFail("Choose a file ending in .zip for the diagnostics export.");
+    try {
+      const schema = state.connection.sqlite
+        .prepare("SELECT COUNT(*) count FROM __drizzle_migrations")
+        .get() as { count: number };
+      await writeFile(destination.filePath, diagnostics.exportZip(schema.count), { mode: 0o600 });
+      diagnostics.record("export-complete");
+      return appOk({ filePath: destination.filePath });
+    } catch (cause) {
+      diagnostics.record("operation-failed", cause);
+      return appFail("Diagnostics could not be exported. Choose a writable folder and try again.");
+    }
+  });
+};
+
 const registerAppHandlers = (state: AppState): void => {
   ipcMain.handle("orix:app.context", (): AppContextContract["response"] => {
     try {
@@ -1726,7 +1908,8 @@ const registerAppHandlers = (state: AppState): void => {
         storeEmail: store?.email ?? null,
         storeAddress: store?.address ?? null,
         storeLogoDataUrl: storeProfile(state.connection, state.storeId).logoDataUrl,
-        businessDayStatus: day?.status ?? "closed",
+        businessDayStatus:
+          state.repositories.counter.session(state.businessDayId)?.status ?? "closed",
         currentUser: user?.name ?? "Owner",
         currentUserId: state.userId,
         currentBranch: branch?.name ?? "Main Branch",
@@ -1745,7 +1928,8 @@ const registerAppHandlers = (state: AppState): void => {
     try {
       const todaySalesMinor = moneyAmount(
         state.connection,
-        "SELECT COALESCE(SUM(total_minor), 0) AS amount FROM sales WHERE business_day_id = ? AND status = 'completed'",
+        "SELECT (SELECT COALESCE(SUM(total_minor),0) FROM sales WHERE business_day_id=? AND status='completed') - (SELECT COALESCE(SUM(total_refund_minor),0) FROM sales_returns WHERE business_day_id=? AND status='posted') AS amount",
+        state.businessDayId,
         state.businessDayId
       );
       const todayPurchasesMinor = moneyAmount(
@@ -1753,11 +1937,9 @@ const registerAppHandlers = (state: AppState): void => {
         "SELECT COALESCE(SUM(total_minor), 0) AS amount FROM purchases WHERE business_day_id = ? AND status = 'received'",
         state.businessDayId
       );
-      const cashInDrawerMinor = moneyAmount(
-        state.connection,
-        "SELECT COALESCE(SUM(paid_minor), 0) AS amount FROM sales WHERE business_day_id = ? AND status = 'completed'",
-        state.businessDayId
-      );
+      const drawer = state.saleService.cashRegisterSummary(state.businessDayId);
+      if (!drawer.ok) return appFail("Unable to reconcile cash drawer.");
+      const cashInDrawerMinor = drawer.value.expectedCashMinor;
       const outstandingCustomersMinor = moneyAmount(
         state.connection,
         "SELECT COALESCE(SUM(debit_minor - credit_minor), 0) AS amount FROM ledger_entries WHERE account_ref_type = 'customer'"
@@ -1910,7 +2092,8 @@ const registerAppHandlers = (state: AppState): void => {
 
   ipcMain.handle("orix:settings.get", (): SettingsGetContract["response"] => {
     try {
-      return appOk(readAppSettings(state));
+      const settings = readAppSettings(state);
+      return appOk(state.locked ? { ...defaultSettings, theme: settings.theme } : settings);
     } catch {
       return appFail("Unable to load settings.");
     }
@@ -2020,6 +2203,7 @@ const registerAppHandlers = (state: AppState): void => {
       }
 
       let connectionClosed = false;
+      let staged: string | undefined;
       try {
         await publishBackupEvent(state, "RestoreStarted", state.storeId, {
           backupFile: basename(request.payload.filePath)
@@ -2032,15 +2216,18 @@ const registerAppHandlers = (state: AppState): void => {
         );
         state.connection.sqlite.pragma("wal_checkpoint(FULL)");
         await state.connection.sqlite.backup(safetyBackupPath);
-        await publishBackupEvent(state, "RestoreCompleted", state.storeId, {
-          backupFile: basename(request.payload.filePath),
-          safetyBackup: basename(safetyBackupPath)
+        staged = await stageDatabaseRestore(request.payload.filePath, state.dbPath, (path) => {
+          const result = verifyBackupFile(path);
+          return result.ok && result.value.valid;
         });
+        // Do not close the live database until the replacement is durable and verified.
         state.connection.close();
         connectionClosed = true;
-        await copyFile(request.payload.filePath, state.dbPath);
+        restarting = true;
+        await replaceWithStagedRestore(staged, state.dbPath);
         setTimeout(() => {
           app.relaunch();
+          diagnostics.cleanShutdown();
           app.exit(0);
         }, 750);
         return appOk({
@@ -2049,23 +2236,24 @@ const registerAppHandlers = (state: AppState): void => {
           safetyBackupPath
         });
       } catch {
-        if (!connectionClosed) {
-          await publishBackupEvent(state, "RestoreFailed", state.storeId, {
-            backupFile: basename(request.payload.filePath)
-          });
+        if (staged !== undefined) await rm(staged, { force: true }).catch(() => undefined);
+        if (connectionClosed) {
+          setTimeout(() => {
+            app.relaunch();
+            app.exit(0);
+          }, 750);
+          return appFail(
+            "Restore could not replace the database. Restarting with the previous database."
+          );
         }
+        await publishBackupEvent(state, "RestoreFailed", state.storeId, {
+          backupFile: basename(request.payload.filePath)
+        });
         return appFail("Restore failed. Your current database was left unchanged.");
       }
     }
   );
 };
-
-const reportDateRange = (
-  payload: ReportsSummaryContract["request"]["payload"]
-): { readonly from: string; readonly to: string } => ({
-  from: `${payload.dateFrom}T00:00:00.000Z`,
-  to: `${payload.dateTo}T23:59:59.999Z`
-});
 
 const registerReportHandlers = (state: AppState): void => {
   ipcMain.handle(
@@ -2075,7 +2263,11 @@ const registerReportHandlers = (state: AppState): void => {
         return appFail("You do not have permission to view reports.");
       }
       try {
-        const { from, to } = reportDateRange(request.payload);
+        const { from, to } = businessDateRange(
+          request.payload.dateFrom,
+          request.payload.dateTo,
+          storeProfile(state.connection, state.storeId).timezone
+        );
         const dailySales = state.connection.sqlite
           .prepare(
             `SELECT s.id AS saleId,
@@ -2087,6 +2279,8 @@ const registerReportHandlers = (state: AppState): void => {
                     s.discount_minor AS discountMinor,
                     s.tax_minor AS taxMinor,
                     s.total_minor AS totalMinor,
+                    COALESCE((SELECT SUM(sr.total_refund_minor) FROM sales_returns sr WHERE sr.original_sale_id=s.id AND sr.status='posted'),0) AS refundedMinor,
+                    s.total_minor - COALESCE((SELECT SUM(sr.total_refund_minor) FROM sales_returns sr WHERE sr.original_sale_id=s.id AND sr.status='posted'),0) AS netTotalMinor,
                     s.paid_minor AS paidMinor,
                     u.display_name AS cashierName
                FROM sales s
@@ -2097,11 +2291,18 @@ const registerReportHandlers = (state: AppState): void => {
                 AND s.status = 'completed'
                 AND s.sale_date BETWEEN ? AND ?
               GROUP BY s.id
-              ORDER BY s.sale_date DESC
-              LIMIT 500`
+              ORDER BY s.sale_date DESC`
           )
           .all(state.storeId, from, to) as DailySalesReportRow[];
 
+        const returnsMinor = moneyAmount(
+          state.connection,
+          "SELECT COALESCE(SUM(total_refund_minor),0) AS amount FROM sales_returns WHERE store_id=? AND status='posted' AND returned_at BETWEEN ? AND ?",
+          state.storeId,
+          from,
+          to
+        );
+        const grossSalesMinor = dailySales.reduce((total, sale) => total + sale.totalMinor, 0);
         const inventoryRows = state.connection.sqlite
           .prepare(
             `SELECT p.id AS productId,
@@ -2124,8 +2325,7 @@ const registerReportHandlers = (state: AppState): void => {
               WHERE p.store_id = ?
                 AND p.archived_at IS NULL
                 AND p.is_stock_tracked = 1
-              ORDER BY p.name ASC
-              LIMIT 1000`
+              ORDER BY p.name ASC`
           )
           .all(state.storeId) as InventoryReportRow[];
 
@@ -2179,8 +2379,7 @@ const registerReportHandlers = (state: AppState): void => {
                 AND c.archived_at IS NULL
               GROUP BY c.id
              HAVING balanceMinor > 0
-              ORDER BY balanceMinor DESC
-              LIMIT 500`
+              ORDER BY balanceMinor DESC`
           )
           .all(state.storeId) as ReceivableReportRow[];
 
@@ -2200,66 +2399,33 @@ const registerReportHandlers = (state: AppState): void => {
                 AND s.archived_at IS NULL
               GROUP BY s.id
              HAVING balanceMinor > 0
-              ORDER BY balanceMinor DESC
-              LIMIT 500`
+              ORDER BY balanceMinor DESC`
           )
           .all(state.storeId) as PayableReportRow[];
 
-        const cashSession = state.connection.sqlite
-          .prepare(
-            `SELECT cs.opening_cash_minor AS openingCashMinor,
-                    cs.status
-               FROM cash_sessions cs
-               JOIN cash_accounts ca ON ca.id = cs.cash_account_id
-              WHERE ca.branch_id = ?
-                AND cs.business_day_id = ?
-              ORDER BY cs.opened_at DESC
-              LIMIT 1`
-          )
-          .get(state.branchId, state.businessDayId) as CashSessionReportRow | undefined;
-        const cashSalesMinor = moneyAmount(
-          state.connection,
-          "SELECT COALESCE(SUM(total_minor), 0) AS amount FROM sales WHERE store_id = ? AND status = 'completed' AND sale_type = 'cash' AND sale_date BETWEEN ? AND ?",
-          state.storeId,
-          from,
-          to
-        );
-        const customerCollectionsMinor = moneyAmount(
-          state.connection,
-          `SELECT COALESCE(SUM(cp.amount_minor), 0) AS amount
-             FROM customer_payments cp
-             JOIN payment_methods pm ON pm.id = cp.payment_method_id
-            WHERE cp.store_id = ?
-              AND cp.status = 'recorded'
-              AND cp.paid_at BETWEEN ? AND ?
-              AND pm.method_type = 'cash'`,
-          state.storeId,
-          from,
-          to
-        );
+        const drawer = state.saleService.cashRegisterSummary(state.businessDayId);
+        if (!drawer.ok) return appFail("Unable to reconcile cash drawer.");
+        const {
+          openingCashMinor,
+          cashSalesMinor,
+          customerPaymentsMinor: customerCollectionsMinor,
+          expectedCashMinor
+        } = drawer.value;
         const supplierPaymentsMinor = moneyAmount(
           state.connection,
-          `SELECT COALESCE(SUM(sp.amount_minor), 0) AS amount
-             FROM supplier_payments sp
-             JOIN payment_methods pm ON pm.id = sp.payment_method_id
-            WHERE sp.store_id = ?
-              AND sp.status = 'recorded'
-              AND sp.paid_at BETWEEN ? AND ?
-              AND pm.method_type = 'cash'`,
-          state.storeId,
-          from,
-          to
+          `SELECT COALESCE(SUM(sp.amount_minor), 0) AS amount FROM supplier_payments sp JOIN payment_methods pm ON pm.id=sp.payment_method_id WHERE sp.business_day_id=? AND sp.status='recorded' AND pm.method_type='cash'`,
+          state.businessDayId
         );
-        const openingCashMinor = cashSession?.openingCashMinor ?? 0;
-        const expectedCashMinor =
-          openingCashMinor + cashSalesMinor + customerCollectionsMinor - supplierPaymentsMinor;
+        const cashSession = state.repositories.counter.session(state.businessDayId);
 
         return appOk({
           generatedAt: new Date().toISOString(),
           dateFrom: request.payload.dateFrom,
           dateTo: request.payload.dateTo,
           totals: {
-            salesMinor: dailySales.reduce((total, sale) => total + sale.totalMinor, 0),
+            grossSalesMinor,
+            returnsMinor,
+            salesMinor: grossSalesMinor - returnsMinor,
             cashExpectedMinor: expectedCashMinor,
             inventoryPurchaseValueMinor: inventoryValue.reduce(
               (total, item) => total + item.purchaseValueMinor,
@@ -2815,6 +2981,8 @@ const migrationSkipReason = (
 };
 
 const can = (state: AppState, permission: PermissionCode): boolean =>
+  !state.locked &&
+  setupCompleted(state.connection, state.storeId) &&
   permissionsForUser(state.connection, state.storeId, state.userId).includes(permission);
 
 const permissionDenied = <T>(
@@ -3263,30 +3431,41 @@ const toCatalogArchiveInput = (
 
 let appState: AppState | undefined;
 
-void app.whenReady().then(() => {
-  appState = initializeAppState();
-  registerAuthHandlers(appState);
-  registerAppHandlers(appState);
-  registerUserHandlers(appState);
-  registerCustomerHandlers(appState);
-  registerSupplierHandlers(appState);
-  registerPurchaseHandlers(appState);
-  registerSaleHandlers(appState);
-  registerReportHandlers(appState);
-  registerInventoryHandlers(appState);
-  registerMigrationHandlers(appState);
-  registerProductHandlers(appState);
-  createMainWindow();
+if (
+  !(globalThis as typeof globalThis & { __orixHasInstanceLock?: boolean }).__orixHasInstanceLock &&
+  !app.requestSingleInstanceLock()
+)
+  app.quit();
+else
+  void app.whenReady().then(async () => {
+    if (!(globalThis as typeof globalThis & { __orixDiagnostics?: Diagnostics }).__orixDiagnostics)
+      diagnostics.beginSession();
+    appState = await initializeAppState();
+    registerDiagnosticsHandlers(appState);
+    registerCounterHandlers(appState);
+    registerAuthHandlers(appState);
+    registerAppHandlers(appState);
+    registerUserHandlers(appState);
+    registerCustomerHandlers(appState);
+    registerSupplierHandlers(appState);
+    registerPurchaseHandlers(appState);
+    registerSaleHandlers(appState);
+    registerReportHandlers(appState);
+    registerInventoryHandlers(appState);
+    registerMigrationHandlers(appState);
+    registerProductHandlers(appState);
+    createMainWindow();
 
-  if (isSmokeRun) {
-    setTimeout(() => {
-      app.quit();
-    }, 500);
-  }
-});
+    if (isSmokeRun) {
+      setTimeout(() => {
+        app.quit();
+      }, 500);
+    }
+  });
 
 app.on("window-all-closed", () => {
   appState?.connection.close();
+  diagnostics.cleanShutdown();
   if (process.platform !== "darwin") {
     app.quit();
   }

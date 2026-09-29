@@ -19,10 +19,13 @@
     "migration:legacy-stock:preview": "pnpm --filter @orix/migration build && node packages/migration/dist/cli/ospos-preview.js",
     "pack:win": "pnpm --filter @orix/desktop pack:win",
     "prepare": "husky",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test",
-    "typecheck": "tsc -b"
+    "test": "pnpm native:node && pnpm build && vitest run",
+    "test:coverage": "pnpm native:node && pnpm build && vitest run --coverage",
+    "test:e2e": "node scripts/run-e2e.mjs",
+    "typecheck": "tsc -b",
+    "seed:demo": "pnpm native:node && pnpm build && node scripts/seed-demo.mjs",
+    "desktop:demo": "node scripts/start-demo.mjs",
+    "native:node": "node scripts/prepare-node.mjs"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.0.0",

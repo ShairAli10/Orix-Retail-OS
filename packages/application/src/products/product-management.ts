@@ -1,3 +1,4 @@
+import { runWithEvents } from "../shared/transactional-events.js";
 import { randomUUID } from "node:crypto";
 import type { ApplicationEvent, CoreError, CoreResult } from "@orix/core";
 import { err, ok } from "@orix/core";
@@ -93,7 +94,9 @@ export class ProductManagementApplicationService {
     const events: ApplicationEvent[] = [];
     const timestamp = new Date().toISOString();
     const write = this.toProductWrite(input, timestamp, productId);
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "products.create", metadata: { actorId: input.userId } },
       () => {
         const created = this.context.repositories.productManagement.createProduct(write);
@@ -117,7 +120,7 @@ export class ProductManagementApplicationService {
       }
     );
 
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async updateProduct(
@@ -135,7 +138,9 @@ export class ProductManagementApplicationService {
 
     const events: ApplicationEvent[] = [];
     const timestamp = new Date().toISOString();
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "products.update", metadata: { actorId: input.userId } },
       () => {
         const baseUpdate = {
@@ -155,7 +160,7 @@ export class ProductManagementApplicationService {
       }
     );
 
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async archiveProduct(input: ProductArchiveInput): Promise<CoreResult<void>> {
@@ -173,11 +178,13 @@ export class ProductManagementApplicationService {
     const events = [
       this.event("ProductArchived", input.id, input.storeId, input.userId, timestamp)
     ];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "products.archive", metadata: { actorId: input.userId } },
       () => Promise.resolve(this.context.repositories.productManagement.archiveProduct(input))
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async restoreProduct(input: ProductArchiveInput): Promise<CoreResult<void>> {
@@ -185,11 +192,13 @@ export class ProductManagementApplicationService {
     const events = [
       this.event("ProductRestored", input.id, input.storeId, input.userId, timestamp)
     ];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "products.restore", metadata: { actorId: input.userId } },
       () => Promise.resolve(this.context.repositories.productManagement.restoreProduct(input))
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async createCatalogItem(
@@ -201,7 +210,9 @@ export class ProductManagementApplicationService {
     }
 
     const events: ApplicationEvent[] = [];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: `products.${input.kind}.create`, metadata: { actorId: input.userId } },
       () => {
         const item = this.context.repositories.productManagement.createCatalogItem(
@@ -223,7 +234,7 @@ export class ProductManagementApplicationService {
         return Promise.resolve(ok({ item: item.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async updateCatalogItem(
@@ -235,7 +246,9 @@ export class ProductManagementApplicationService {
     }
 
     const events: ApplicationEvent[] = [];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: `products.${input.kind}.update`, metadata: { actorId: input.userId } },
       () => {
         const item = this.context.repositories.productManagement.updateCatalogItem(
@@ -258,7 +271,7 @@ export class ProductManagementApplicationService {
         return Promise.resolve(ok({ item: item.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async archiveCatalogItem(
@@ -273,7 +286,9 @@ export class ProductManagementApplicationService {
         input.timestamp
       )
     ];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: `products.${input.kind}.archive`, metadata: { actorId: input.userId } },
       () =>
         Promise.resolve(
@@ -285,7 +300,7 @@ export class ProductManagementApplicationService {
           )
         )
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async restoreCatalogItem(
@@ -300,7 +315,9 @@ export class ProductManagementApplicationService {
         input.timestamp
       )
     ];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: `products.${input.kind}.restore`, metadata: { actorId: input.userId } },
       () =>
         Promise.resolve(
@@ -312,7 +329,7 @@ export class ProductManagementApplicationService {
           )
         )
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   private validateProduct(input: ProductFormInput): CoreResult<void> {
@@ -438,21 +455,5 @@ export class ProductManagementApplicationService {
       payload: { entityId },
       metadata: { storeId, actorId }
     };
-  }
-
-  private async publishAfterCommit<T>(
-    result: CoreResult<T>,
-    events: readonly ApplicationEvent[]
-  ): Promise<CoreResult<T>> {
-    if (!result.ok) {
-      return result;
-    }
-    for (const event of events) {
-      const published = await this.context.eventPublisher.publish(event);
-      if (!published.ok) {
-        return err(published.error);
-      }
-    }
-    return result;
   }
 }

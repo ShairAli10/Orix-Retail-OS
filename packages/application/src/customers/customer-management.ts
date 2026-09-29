@@ -1,3 +1,4 @@
+import { runWithEvents } from "../shared/transactional-events.js";
 import { randomUUID } from "node:crypto";
 import type { ApplicationEvent, CoreError, CoreResult } from "@orix/core";
 import { err, ok } from "@orix/core";
@@ -67,7 +68,9 @@ export class CustomerManagementApplicationService {
     if (!phoneValidation.ok) return phoneValidation;
 
     const events: ApplicationEvent[] = [];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "customers.create", metadata: { actorId: input.userId } },
       () => {
         const customer = this.context.repositories.customers.createCustomer(input);
@@ -86,7 +89,7 @@ export class CustomerManagementApplicationService {
         return Promise.resolve(ok({ customer: customer.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async updateCustomer(
@@ -98,7 +101,9 @@ export class CustomerManagementApplicationService {
     if (!phoneValidation.ok) return phoneValidation;
 
     const events: ApplicationEvent[] = [];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "customers.update", metadata: { actorId: input.userId } },
       () => {
         const customer = this.context.repositories.customers.updateCustomer(input);
@@ -107,25 +112,29 @@ export class CustomerManagementApplicationService {
         return Promise.resolve(ok({ customer: customer.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async archiveCustomer(input: CustomerArchiveInput): Promise<CoreResult<void>> {
     const events = [this.event("CustomerArchived", input.id, input.storeId, input.userId)];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "customers.archive", metadata: { actorId: input.userId } },
       () => Promise.resolve(this.context.repositories.customers.archiveCustomer(input))
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async restoreCustomer(input: CustomerArchiveInput): Promise<CoreResult<void>> {
     const events = [this.event("CustomerRestored", input.id, input.storeId, input.userId)];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "customers.restore", metadata: { actorId: input.userId } },
       () => Promise.resolve(this.context.repositories.customers.restoreCustomer(input))
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async recordPayment(
@@ -141,7 +150,9 @@ export class CustomerManagementApplicationService {
     }
 
     const events: ApplicationEvent[] = [];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "customers.payment.record", metadata: { actorId: input.userId } },
       () => {
         const payment = this.context.repositories.customers.recordPayment(input);
@@ -152,7 +163,7 @@ export class CustomerManagementApplicationService {
         return Promise.resolve(ok({ payment: payment.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   private validateCustomer(input: CustomerWrite): CoreResult<void> {
@@ -178,18 +189,6 @@ export class CustomerManagementApplicationService {
     return exists.value
       ? err(validationError("A customer with this phone already exists.", ["phone"]))
       : ok(undefined);
-  }
-
-  private async publishAfterCommit<T>(
-    result: CoreResult<T>,
-    events: readonly ApplicationEvent[]
-  ): Promise<CoreResult<T>> {
-    if (!result.ok) return result;
-    for (const event of events) {
-      const published = await this.context.eventPublisher.publish(event);
-      if (!published.ok) return published;
-    }
-    return result;
   }
 
   private event(

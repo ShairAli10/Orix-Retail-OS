@@ -435,6 +435,17 @@ export class CustomerRepository extends BaseRepository<typeof customers> {
       const cashAccountId = this.ensureCashAccount(input);
       const paymentMethodId = this.ensurePaymentMethod(input);
       const accounts = this.ensureLedgerAccounts(input.storeId, input.userId);
+      const isCash = input.paymentMethod === "cash";
+      const settlementAccountId = isCash
+        ? accounts.cashAccountId
+        : this.ensureLedgerAccount(
+            input.storeId,
+            `SETTLEMENT-${input.paymentMethod.toUpperCase()}`,
+            this.paymentMethodName(input.paymentMethod),
+            "asset",
+            input.userId,
+            timestamp
+          );
       this.connection.sqlite
         .prepare(
           `INSERT INTO customer_payments (
@@ -480,13 +491,13 @@ export class CustomerRepository extends BaseRepository<typeof customers> {
         );
       this.insertLedgerEntry(
         transactionId,
-        accounts.cashAccountId,
-        "cash",
+        settlementAccountId,
+        isCash ? "cash" : "noncash",
         null,
         null,
         input.amountMinor,
         0,
-        "Cash received"
+        isCash ? "Cash received" : "Noncash payment received"
       );
       this.insertLedgerEntry(
         transactionId,
@@ -820,7 +831,11 @@ export class CustomerRepository extends BaseRepository<typeof customers> {
       return defaultMetadata;
     }
     try {
-      const parsed = JSON.parse(notes) as Partial<CustomerProfileMetadata>;
+      const value: unknown = JSON.parse(notes);
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        return { ...defaultMetadata, notes };
+      }
+      const parsed = value as Partial<CustomerProfileMetadata>;
       return {
         city: typeof parsed.city === "string" ? parsed.city : null,
         cnic: typeof parsed.cnic === "string" ? parsed.cnic : null,
@@ -838,7 +853,7 @@ export class CustomerRepository extends BaseRepository<typeof customers> {
           typeof parsed.openingBalanceMinor === "number" ? parsed.openingBalanceMinor : 0,
         openingBalanceDate:
           typeof parsed.openingBalanceDate === "string" ? parsed.openingBalanceDate : null,
-        notes: typeof parsed.notes === "string" ? parsed.notes : notes
+        notes: typeof parsed.notes === "string" ? parsed.notes : null
       };
     } catch {
       return { ...defaultMetadata, notes };
@@ -928,23 +943,27 @@ export class CustomerRepository extends BaseRepository<typeof customers> {
   }
 
   private ensureCashAccount(input: CustomerPaymentWrite): string {
+    const name =
+      input.paymentMethod === "cash"
+        ? "Main Cash Drawer"
+        : this.paymentMethodName(input.paymentMethod);
     const existing = this.connection.sqlite
-      .prepare(
-        "SELECT id FROM cash_accounts WHERE branch_id = ? AND name = 'Main Cash Drawer' LIMIT 1"
-      )
-      .get(input.branchId) as IdRow | undefined;
+      .prepare("SELECT id FROM cash_accounts WHERE branch_id = ? AND name = ? LIMIT 1")
+      .get(input.branchId, name) as IdRow | undefined;
     if (existing !== undefined) return existing.id;
     const id = randomUUID();
     const timestamp = new Date().toISOString();
     this.connection.sqlite
       .prepare(
         `INSERT INTO cash_accounts (id, store_id, branch_id, name, account_type, status, currency_code, opened_at, created_at, updated_at, created_by_user_id, updated_by_user_id)
-         VALUES (?, ?, ?, 'Main Cash Drawer', 'cash_drawer', 'active', 'PKR', ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, 'active', 'PKR', ?, ?, ?, ?, ?)`
       )
       .run(
         id,
         input.storeId,
         input.branchId,
+        name,
+        input.paymentMethod === "cash" ? "cash_drawer" : "bank",
         timestamp,
         timestamp,
         timestamp,

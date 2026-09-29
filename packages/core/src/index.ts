@@ -14,3 +14,4 @@ export * from "./result.js";
 export * from "./transaction.js";
 export * from "./unit-of-work.js";
 export * from "./validation.js";
+export * from "./refund-allocation.js";

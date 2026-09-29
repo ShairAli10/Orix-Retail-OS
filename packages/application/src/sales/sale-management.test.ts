@@ -10,6 +10,9 @@ import { describe, expect, it } from "vitest";
 import { SaleManagementApplicationService } from "./sale-management.js";
 
 const sale: SaleDetail = {
+  returnStatus: "none",
+  refundedMinor: 0,
+  netTotalMinor: 10000,
   id: "sale-1",
   saleNumber: "SALE-000001",
   customerId: null,

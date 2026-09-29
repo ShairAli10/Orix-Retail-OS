@@ -7,6 +7,7 @@ import { repositoryError } from "../shared/repository-error.js";
 export type ProductStatusFilter = "active" | "inactive" | "archived" | "all";
 
 export type ProductListQuery = {
+  readonly barcode?: string;
   readonly storeId: string;
   readonly search?: string;
   readonly categoryId?: string;
@@ -594,6 +595,10 @@ export class ProductManagementRepository {
         clauses.push("p.status = ?");
         params.push(query.status);
       }
+    }
+    if (query.barcode !== undefined) {
+      clauses.push("p.barcode = ?");
+      params.push(query.barcode.trim());
     }
     if (query.search !== undefined && query.search.trim() !== "") {
       clauses.push(

@@ -1,3 +1,4 @@
+import { runWithEvents } from "../shared/transactional-events.js";
 import { randomUUID } from "node:crypto";
 import type { ApplicationEvent, CoreError, CoreResult } from "@orix/core";
 import { err, ok } from "@orix/core";
@@ -64,7 +65,9 @@ export class SaleManagementApplicationService {
     const validation = this.validateSale(input, "draft");
     if (!validation.ok) return validation;
     const events: ApplicationEvent[] = [];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "sales.save-draft", metadata: { actorId: input.userId } },
       () => {
         const sale = this.context.repositories.sales.saveDraft(input, "draft");
@@ -75,14 +78,16 @@ export class SaleManagementApplicationService {
         return Promise.resolve(ok({ sale: sale.value, receipt: null }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async holdSale(input: SaleWrite): Promise<CoreResult<SaleMutationOutput>> {
     const validation = this.validateSale(input, "held");
     if (!validation.ok) return validation;
     const events: ApplicationEvent[] = [];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "sales.hold", metadata: { actorId: input.userId } },
       () => {
         const sale = this.context.repositories.sales.saveDraft(input, "held");
@@ -91,7 +96,7 @@ export class SaleManagementApplicationService {
         return Promise.resolve(ok({ sale: sale.value, receipt: null }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async completeSale(input: SaleWrite): Promise<CoreResult<SaleMutationOutput>> {
@@ -108,9 +113,21 @@ export class SaleManagementApplicationService {
       }
     }
     const events: ApplicationEvent[] = [];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "sales.complete", metadata: { actorId: input.userId } },
       () => {
+        if (input.operationId !== undefined) {
+          const previous = this.context.repositories.sales.completedOperation(input);
+          if (!previous.ok) return Promise.resolve(previous);
+          if (previous.value !== undefined) {
+            const receipt = this.context.repositories.sales.receipt(previous.value.id);
+            return Promise.resolve(
+              receipt.ok ? ok({ sale: previous.value, receipt: receipt.value }) : receipt
+            );
+          }
+        }
         const sale = this.context.repositories.sales.completeSale(input);
         if (!sale.ok) return Promise.resolve(sale);
         const receipt = this.context.repositories.sales.receipt(sale.value.id);
@@ -123,7 +140,7 @@ export class SaleManagementApplicationService {
         return Promise.resolve(ok({ sale: sale.value, receipt: receipt.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async cancelDraft(input: {
@@ -138,18 +155,22 @@ export class SaleManagementApplicationService {
       return err(validationError("Cancellation reason is required.", ["reason"]));
     }
     const events = [this.event("SaleCancelled", input.id, input)];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "sales.cancel", metadata: { actorId: input.userId } },
       () => Promise.resolve(this.context.repositories.sales.cancelDraft(input))
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   public async returnSale(input: SaleReturnWrite): Promise<CoreResult<SaleReturnOutput>> {
     const validation = this.validateReturn(input);
     if (!validation.ok) return validation;
     const events: ApplicationEvent[] = [];
-    const result = await this.context.transactionRunner.run(
+    const result = await runWithEvents(
+      this.context,
+      events,
       { name: "sales.return", metadata: { actorId: input.userId } },
       () => {
         const saleReturn = this.context.repositories.sales.returnSale(input);
@@ -160,7 +181,7 @@ export class SaleManagementApplicationService {
         return Promise.resolve(ok({ return: saleReturn.value }));
       }
     );
-    return this.publishAfterCommit(result, events);
+    return result;
   }
 
   private validateSale(
@@ -168,6 +189,15 @@ export class SaleManagementApplicationService {
     targetStatus: "draft" | "held" | "completed"
   ): CoreResult<void> {
     const fields: string[] = [];
+    if (!["cash", "credit", "mixed"].includes(input.paymentType)) fields.push("paymentType");
+    if (!Number.isFinite(Date.parse(input.saleDate))) fields.push("saleDate");
+    if (new Set(input.items.map((item) => item.productId)).size !== input.items.length)
+      fields.push("items");
+    if (![input.discountMinor, input.taxMinor, input.cashReceivedMinor].every(Number.isSafeInteger))
+      fields.push("amounts");
+    if (input.paymentType === "credit" && input.cashReceivedMinor !== 0)
+      fields.push("cashReceivedMinor");
+
     if (input.saleDate.trim().length === 0) fields.push("saleDate");
     if (input.discountMinor < 0) fields.push("discountMinor");
     if (input.taxMinor < 0) fields.push("taxMinor");
@@ -176,7 +206,11 @@ export class SaleManagementApplicationService {
     for (const item of input.items) {
       if (item.productId.trim().length === 0) fields.push("productId");
       if (item.unitId.trim().length === 0) fields.push("unitId");
-      if (item.quantity <= 0) fields.push("quantity");
+      if (!Number.isFinite(item.quantity) || item.quantity <= 0) fields.push("quantity");
+      if (![item.unitPriceMinor, item.discountMinor, item.taxMinor].every(Number.isSafeInteger))
+        fields.push("items");
+      const lineTotal = item.quantity * item.unitPriceMinor - item.discountMinor + item.taxMinor;
+      if (!Number.isSafeInteger(lineTotal) || lineTotal < 0) fields.push("items");
       if (item.unitPriceMinor < 0) fields.push("unitPriceMinor");
       if (item.discountMinor < 0) fields.push("itemDiscountMinor");
       if (item.taxMinor < 0) fields.push("itemTaxMinor");
@@ -187,7 +221,7 @@ export class SaleManagementApplicationService {
       0
     );
     const totalMinor = subtotalMinor - input.discountMinor + input.taxMinor;
-    if (totalMinor < 0) fields.push("total");
+    if (!Number.isSafeInteger(totalMinor) || totalMinor < 0) fields.push("total");
     if (
       targetStatus === "completed" &&
       input.paymentType === "cash" &&
@@ -222,18 +256,6 @@ export class SaleManagementApplicationService {
     return fields.length > 0
       ? err(validationError("Sale return details are missing or invalid.", [...new Set(fields)]))
       : ok(undefined);
-  }
-
-  private async publishAfterCommit<T>(
-    result: CoreResult<T>,
-    events: readonly ApplicationEvent[]
-  ): Promise<CoreResult<T>> {
-    if (!result.ok) return result;
-    for (const event of events) {
-      const published = await this.context.eventPublisher.publish(event);
-      if (!published.ok) return published;
-    }
-    return result;
   }
 
   private event(

@@ -1,3 +1,20 @@
+import { returnPreview, returnBlockingMessage } from "./features/sales/return-preview.js";
+import { activitySummary, displayLabel } from "./presentation/text.js";
+import {
+  CounterReadiness,
+  enableReadiness,
+  readinessEnabled
+} from "./features/onboarding/readiness.js";
+import { DiagnosticsPanel, DiagnosticNotice } from "./features/support/diagnostics-panel.js";
+import { reportRendererError } from "./features/support/report-error.js";
+import {
+  emptySaleForm,
+  loadBasket,
+  saveBasket,
+  type SaleFormState
+} from "./features/pos/basket-state.js";
+import { Dialog } from "./components/dialog.js";
+import { CounterPage } from "./features/counter/counter-page.js";
 import type {
   AppContextDto,
   AppSettingsDto,
@@ -69,7 +86,16 @@ import type {
   UserSavePayload
 } from "@orix/electron";
 import { uiClassNames } from "@orix/ui";
-import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  Component,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useId,
+  useRef,
+  type ReactNode
+} from "react";
 import { createRoot } from "react-dom/client";
 import type { OrixPreloadApi } from "../preload/index.js";
 import {
@@ -113,7 +139,7 @@ declare global {
 }
 
 type ProductFormState = {
-  readonly id?: string;
+  readonly id?: string; 
   readonly name: string;
   readonly barcode: string;
   readonly categoryId: string;
@@ -296,33 +322,6 @@ type PurchaseReturnFormState = {
   readonly quantities: Readonly<Record<string, string>>;
 };
 
-type PosCartItem = {
-  readonly productId: string;
-  readonly productName: string;
-  readonly barcode: string | null;
-  readonly unitId: string;
-  readonly quantity: number;
-  readonly unitPriceMinor: number;
-  readonly discountMinor: number;
-  readonly taxMinor: number;
-  readonly currentStock: number;
-};
-
-type SaleFormState = {
-  readonly id?: string;
-  readonly customerId: string;
-  readonly saleNumber: string;
-  readonly saleDate: string;
-  readonly paymentType: SalePaymentType;
-  readonly discount: string;
-  readonly tax: string;
-  readonly cashReceived: string;
-  readonly notes: string;
-  readonly holdReason: string;
-  readonly items: readonly PosCartItem[];
-  readonly expectedUpdatedAt?: string | null;
-};
-
 type SaleReturnFormState = {
   readonly sale: SaleDetailDto;
   readonly reason: string;
@@ -470,19 +469,6 @@ const emptyPurchaseForm: PurchaseFormState = {
   items: [emptyPurchaseItem]
 };
 
-const emptySaleForm: SaleFormState = {
-  customerId: "",
-  saleNumber: "",
-  saleDate: new Date().toISOString().slice(0, 16),
-  paymentType: "cash",
-  discount: "0",
-  tax: "0",
-  cashReceived: "0",
-  notes: "",
-  holdReason: "",
-  items: []
-};
-
 const routePermissions: Record<RouteId, AppContextDto["permissions"][number]> = {
   dashboard: "dashboard.view",
   pos: "pos.view",
@@ -526,12 +512,19 @@ class ErrorBoundary extends Component<{ readonly children: ReactNode }, ErrorBou
     return { hasError: true };
   }
 
+  public override componentDidCatch(error: Error) {
+    reportRendererError("react", error);
+  }
+
   public override render() {
     if (this.state.hasError) {
       return (
         <div className="fatal-state">
           <h1>Something went wrong</h1>
-          <p>Restart Orix Retail OS and try again. Your local data is still stored safely.</p>
+          <p>
+            Restart Orix, then check Sales History before retrying a payment. Ask the owner to
+            export diagnostics from Settings.
+          </p>
         </div>
       );
     }
@@ -540,7 +533,9 @@ class ErrorBoundary extends Component<{ readonly children: ReactNode }, ErrorBou
 }
 
 const App = () => {
-  const [route, setRoute] = useState<RouteId>(() => routeFromPath(window.location.pathname));
+  const [route, setRoute] = useState<RouteId>(() =>
+    routeFromPath(window.location.hash.slice(1) || "/")
+  );
   const [authStatus, setAuthStatus] = useState<AuthStatusDto | null>(null);
   const [context, setContext] = useState<AppContextDto | null>(null);
   const [settings, setSettings] = useState<AppSettingsDto | null>(null);
@@ -553,7 +548,7 @@ const App = () => {
 
   const navigate = useCallback((nextRoute: RouteId) => {
     const path = pathForRoute(nextRoute);
-    window.history.pushState({ route: nextRoute }, "", path);
+    window.history.pushState({ route: nextRoute }, "", `#${path}`);
     setRoute(nextRoute);
   }, []);
 
@@ -648,7 +643,7 @@ const App = () => {
 
   useEffect(() => {
     const onPopState = () => {
-      setRoute(routeFromPath(window.location.pathname));
+      setRoute(routeFromPath(window.location.hash.slice(1) || "/"));
     };
     window.addEventListener("popstate", onPopState);
     return () => {
@@ -736,10 +731,12 @@ const App = () => {
       return <DashboardPage onNavigate={navigate} showToast={showToast} />;
     }
     if (route === "pos") {
+      if (context === null) return <p role="status">Loading your counter…</p>;
       return (
         <PosModule
+          key={context.currentUserId}
           context={context}
-          permissions={context?.permissions ?? []}
+          permissions={context.permissions}
           settings={settings}
           showToast={showToast}
         />
@@ -770,6 +767,15 @@ const App = () => {
         />
       );
     }
+    if (route === "expenses")
+      return (
+        <CounterPage
+          canExpense={hasPermission("expenses.manage")}
+          onChanged={() => {
+            void loadShell();
+          }}
+        />
+      );
     if (route === "reports") {
       return <ReportsModule showToast={showToast} />;
     }
@@ -789,11 +795,8 @@ const App = () => {
         />
       );
     }
-    if (route === "about") {
-      return <AboutPage version={context?.applicationVersion ?? "0.0.0"} />;
-    }
-    return <DashboardPage onNavigate={navigate} showToast={showToast} />;
-  }, [context?.applicationVersion, hasPermission, navigate, route, settings, showToast]);
+    return <AboutPage version={context?.applicationVersion ?? "0.0.0"} />;
+  }, [context, hasPermission, navigate, route, settings, showToast]);
 
   if (authStatus === null) {
     return (
@@ -810,8 +813,9 @@ const App = () => {
     return (
       <SetupWizard
         onComplete={(nextStatus) => {
+          enableReadiness();
           setAuthStatus(nextStatus);
-          showToast("Store setup completed.");
+          showToast("Store created. Prepare your counter before trading.");
         }}
         showToast={showToast}
       />
@@ -825,6 +829,7 @@ const App = () => {
         locked={authStatus.locked && context !== null}
         currentUser={context?.currentUser ?? authStatus.rememberedUsername ?? ""}
         onAuthenticated={(nextStatus) => {
+          setContext(null);
           setAuthStatus(nextStatus);
         }}
         showToast={showToast}
@@ -835,6 +840,7 @@ const App = () => {
   return (
     <ErrorBoundary>
       <main className="desktop-shell">
+        <DiagnosticNotice />
         <TitleBar context={context} clock={clock} onNavigate={navigate} />
         <div className="desktop-body">
           <Sidebar
@@ -846,7 +852,19 @@ const App = () => {
             }}
             permissions={context?.permissions ?? []}
           />
-          <section className="main-content">{renderedPage}</section>
+          <section className="main-content">
+            {readinessEnabled() &&
+            context?.permissions.includes("settings.manage") &&
+            (route === "dashboard" || route === "pos") ? (
+              <CounterReadiness
+                key={context.currentUserId}
+                userId={context.currentUserId}
+                route={route}
+                onNavigate={navigate}
+              />
+            ) : null}
+            {renderedPage}
+          </section>
         </div>
         <StatusBar context={context} />
         {toast === null ? null : <Toast toast={toast} />}
@@ -865,6 +883,17 @@ const SetupWizard = ({
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<SetupWizardState>(emptySetupForm);
   const [submittedSteps, setSubmittedSteps] = useState<ReadonlySet<number>>(() => new Set());
+  const [showCredentials, setShowCredentials] = useState(false);
+  const panelRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    panelRef.current?.querySelector<HTMLElement>("h1")?.focus();
+  }, [step]);
+  const focusError = () =>
+    requestAnimationFrame(() => {
+      const field = panelRef.current?.querySelector<HTMLInputElement>('[aria-invalid="true"]');
+      field?.closest("details")?.setAttribute("open", "");
+      field?.focus();
+    });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const errors = submittedSteps.has(step) ? setupStepErrors(form, step) : {};
@@ -874,40 +903,90 @@ const SetupWizard = ({
     const validationError = validateSetupForm(form);
     if (validationError !== null) {
       setError(validationError);
-      showToast(validationError, "error");
+      focusError();
       return;
     }
     setSaving(true);
     setError(null);
     const payload: SetupStorePayload = { ...form };
-    const response = await window.orix.auth.setupStore(payload);
-    if (response.ok) {
-      onComplete(response.value);
-    } else {
-      setError(response.error.message);
-      showToast(response.error.message, "error");
+    try {
+      const response = await window.orix.auth.setupStore(payload);
+      if (response.ok) {
+        onComplete(response.value);
+      } else {
+        setError(response.error.message);
+        showToast(response.error.message, "error");
+      }
+    } catch {
+      setError("Store setup could not finish. Please try again.");
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
+  const next = () => {
+    setSubmittedSteps((previous) => new Set([...previous, step]));
+    const validationError = validateSetupStep(form, step);
+    if (validationError !== null) {
+      setError(validationError);
+      focusError();
+      return;
+    }
+    setError(null);
+    if (step === 1)
+      setForm((previous) => ({
+        ...previous,
+        adminFullName: previous.adminFullName || previous.ownerName
+      }));
+    setStep(step === 1 ? 3 : 4);
+  };
   return (
-    <main className="auth-layout">
-      <section className="auth-panel setup-panel">
+    <main className="auth-layout setup-layout">
+      <form
+        ref={panelRef}
+        noValidate
+        className="auth-panel setup-panel"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!saving) {
+            if (step === 4) void finish();
+            else next();
+          }
+        }}
+      >
         <div className="brand-lockup">
           <div className="brand-mark">OR</div>
           <div>
             <p className="eyebrow">First Run Setup</p>
-            <h1>Prepare your store</h1>
+            <h1 tabIndex={-1}>Prepare your store</h1>
           </div>
         </div>
-        <div className="stepper" aria-label="Setup progress">
-          {[1, 2, 3, 4].map((item) => (
-            <span className={item <= step ? "active" : ""} key={item}>
-              {item}
-            </span>
+        <p className="muted-text">
+          Set up this computer for one store counter. You can change store details in Settings
+          later. Your entries are saved when you create the store.
+        </p>
+        <ol className="setup-steps" aria-label="Setup progress">
+          {(
+            [
+              [1, "Store essentials"],
+              [3, "Owner access"],
+              [4, "Review"]
+            ] as const
+          ).map(([number, label], index) => (
+            <li
+              key={number}
+              aria-current={step === number ? "step" : undefined}
+              className={step === number ? "current" : ""}
+            >
+              {index + 1}. {label}
+            </li>
           ))}
-        </div>
-        {error === null ? null : <div className="form-error">{error}</div>}
+        </ol>
+        {error === null ? null : (
+          <div className="form-error" role="alert">
+            {error}
+          </div>
+        )}
         {step === 1 ? (
           <div className="form-grid">
             <Field
@@ -920,13 +999,6 @@ const SetupWizard = ({
               }}
             />
             <Field
-              label="Business Name"
-              value={form.businessName}
-              onChange={(businessName) => {
-                setForm({ ...form, businessName });
-              }}
-            />
-            <Field
               label="Owner Name *"
               value={form.ownerName}
               error={errors.ownerName}
@@ -935,95 +1007,126 @@ const SetupWizard = ({
                 setForm({ ...form, ownerName });
               }}
             />
-            <Field
-              label="Phone"
-              value={form.phone}
-              onChange={(phone) => {
-                setForm({ ...form, phone });
-              }}
-            />
-            <Field
-              label="Email"
-              type="email"
-              value={form.email}
-              error={errors.email}
-              onChange={(email) => {
-                setForm({ ...form, email });
-              }}
-            />
-            <Field
-              label="Currency"
-              value={form.currency}
-              error={errors.currency}
-              required
-              onChange={(currency) => {
-                setForm({ ...form, currency });
-              }}
-            />
-            <Field
-              label="Timezone"
-              value={form.timezone}
-              error={errors.timezone}
-              required
-              onChange={(timezone) => {
-                setForm({ ...form, timezone });
-              }}
-            />
-            <label className="wide">
-              Address
-              <textarea
-                value={form.address}
-                onChange={(event) => {
-                  setForm({ ...form, address: event.target.value });
-                }}
-              />
-            </label>
-            <label className="wide">
-              Logo
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file === undefined) return;
-                  const reader = new FileReader();
-                  reader.onload = () => {
-                    setForm({
-                      ...form,
-                      logoDataUrl: typeof reader.result === "string" ? reader.result : null
-                    });
-                  };
-                  reader.readAsDataURL(file);
-                }}
-              />
-            </label>
-            <label className="check-row wide">
-              <input
-                type="checkbox"
-                checked={form.taxEnabled}
-                onChange={(event) => {
-                  setForm({ ...form, taxEnabled: event.target.checked });
-                }}
-              />
-              Tax enabled
-            </label>
-          </div>
-        ) : null}
-        {step === 2 ? (
-          <div className="form-grid">
-            <Field
-              label="Default Branch Name *"
-              value={form.branchName}
-              error={errors.branchName}
-              required
-              onChange={(branchName) => {
-                setForm({ ...form, branchName });
-              }}
-            />
+            <details className="wide setup-options">
+              <summary>Receipt details and regional settings (optional)</summary>
+              <div className="form-grid">
+                <Field
+                  label="Business Name (optional)"
+                  helperText="Use this if the business name on receipts differs from your store name."
+                  value={form.businessName}
+                  onChange={(businessName) => {
+                    setForm({ ...form, businessName });
+                  }}
+                />
+                <Field
+                  label="Phone"
+                  value={form.phone}
+                  onChange={(phone) => {
+                    setForm({ ...form, phone });
+                  }}
+                />
+                <Field
+                  label="Email"
+                  type="email"
+                  value={form.email}
+                  error={errors.email}
+                  onChange={(email) => {
+                    setForm({ ...form, email });
+                  }}
+                />
+                <Field
+                  label="Currency"
+                  value={form.currency}
+                  error={errors.currency}
+                  required
+                  onChange={(currency) => {
+                    setForm({ ...form, currency });
+                  }}
+                />
+                <Field
+                  label="Timezone"
+                  value={form.timezone}
+                  error={errors.timezone}
+                  required
+                  onChange={(timezone) => {
+                    setForm({ ...form, timezone });
+                  }}
+                />
+                <label className="wide">
+                  Address
+                  <textarea
+                    value={form.address}
+                    onChange={(event) => {
+                      setForm({ ...form, address: event.target.value });
+                    }}
+                  />
+                </label>
+                <label className="wide">
+                  Logo
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file === undefined) return;
+                      if (!file.type.startsWith("image/") || file.size > 2 * 1024 * 1024) {
+                        setError("Choose an image smaller than 2 MB.");
+                        return;
+                      }
+                      const reader = new FileReader();
+                      reader.onerror = () => {
+                        setError("The logo could not be read. Choose another image.");
+                      };
+                      reader.onload = () => {
+                        setForm((previous) => ({
+                          ...previous,
+                          logoDataUrl: typeof reader.result === "string" ? reader.result : null
+                        }));
+                      };
+                      reader.readAsDataURL(file);
+                    }}
+                  />
+                </label>
+                <p className="wide muted-text">
+                  Logo is optional. Choose an image smaller than 2 MB.
+                </p>
+                {form.logoDataUrl ? (
+                  <div className="wide">
+                    <img
+                      src={form.logoDataUrl}
+                      alt="Receipt logo preview"
+                      style={{ maxWidth: 120, maxHeight: 80 }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setForm({ ...form, logoDataUrl: null });
+                      }}
+                    >
+                      Remove logo
+                    </button>
+                  </div>
+                ) : null}
+                <label className="check-row wide">
+                  <input
+                    type="checkbox"
+                    checked={form.taxEnabled}
+                    onChange={(event) => {
+                      setForm({ ...form, taxEnabled: event.target.checked });
+                    }}
+                  />
+                  Tax enabled — makes tax available in store settings; review rates before selling.
+                </label>
+              </div>
+            </details>
           </div>
         ) : null}
         {step === 3 ? (
           <div className="form-grid">
+            <p className="wide muted-text">
+              This owner account manages the store and staff. Use your password to sign in, or your
+              PIN for quick access on this counter.
+            </p>
             <Field
               label="Full Name *"
               value={form.adminFullName}
@@ -1044,7 +1147,8 @@ const SetupWizard = ({
             />
             <Field
               label="Password *"
-              type="password"
+              helperText="Use at least 8 characters."
+              type={showCredentials ? "text" : "password"}
               value={form.password}
               error={errors.password}
               required
@@ -1054,7 +1158,7 @@ const SetupWizard = ({
             />
             <Field
               label="Confirm Password *"
-              type="password"
+              type={showCredentials ? "text" : "password"}
               value={form.confirmPassword}
               error={errors.confirmPassword}
               required
@@ -1064,6 +1168,7 @@ const SetupWizard = ({
             />
             <Field
               label="PIN *"
+              type={showCredentials ? "text" : "password"}
               value={form.pin}
               error={errors.pin}
               required
@@ -1073,50 +1178,68 @@ const SetupWizard = ({
                 setForm({ ...form, pin: pin.replace(/\D/g, "").slice(0, 4) });
               }}
             />
+            <label className="check-row wide">
+              <input
+                type="checkbox"
+                checked={showCredentials}
+                onChange={(event) => {
+                  setShowCredentials(event.target.checked);
+                }}
+              />
+              Show password and PIN
+            </label>
           </div>
         ) : null}
         {step === 4 ? (
           <div className="summary-card">
             <Detail label="Store" value={form.storeName || "Not set"} />
-            <Detail label="Branch" value={form.branchName || "Not set"} />
+            <Detail label="Counter" value="One counter on this computer" />
             <Detail label="Admin" value={form.adminFullName || "Not set"} />
+            <Detail label="Username" value={form.username} />
+            <Detail label="Tax" value={form.taxEnabled ? "Tax enabled" : "Tax disabled"} />
             <Detail label="Currency" value={form.currency} />
             <Detail label="Timezone" value={form.timezone} />
+            <div className="dialog-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setStep(1);
+                }}
+              >
+                Edit store details
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setStep(3);
+                }}
+              >
+                Edit owner access
+              </button>
+            </div>
+            <p>
+              Next, prepare inventory, opening cash, hardware and a backup before serving customers.
+            </p>
           </div>
         ) : null}
-        <footer className="dialog-actions">
+        <footer className="dialog-actions setup-actions">
           <button
+            type="button"
             disabled={step === 1 || saving}
             onClick={() => {
-              setStep((value) => Math.max(1, value - 1));
+              setError(null);
+              setStep(step === 4 ? 3 : 1);
             }}
           >
             Back
           </button>
-          {step < 4 ? (
-            <button
-              className="primary"
-              onClick={() => {
-                setSubmittedSteps((previous) => new Set([...previous, step]));
-                const validationError = validateSetupStep(form, step);
-                if (validationError !== null) {
-                  setError(validationError);
-                  showToast(validationError, "error");
-                  return;
-                }
-                setError(null);
-                setStep((value) => Math.min(4, value + 1));
-              }}
-            >
-              Next
-            </button>
-          ) : (
-            <button className="primary" disabled={saving} onClick={() => void finish()}>
-              {saving ? "Finishing..." : "Finish Setup"}
-            </button>
-          )}
+          <button type="submit" className="primary" disabled={saving}>
+            {saving ? "Creating store…" : step === 4 ? "Create store" : "Next"}
+          </button>
         </footer>
-      </section>
+      </form>
     </main>
   );
 };
@@ -1355,18 +1478,7 @@ const CustomerModule = ({
     "overview" | "statement" | "payments" | "purchases" | "notes" | "activity"
   >("overview");
   const [visibleColumns, setVisibleColumns] = useState(
-    () =>
-      new Set([
-        "avatar",
-        "name",
-        "phone",
-        "city",
-        "balance",
-        "creditLimit",
-        "lastPurchase",
-        "status",
-        "actions"
-      ])
+    () => new Set(["name", "phone", "balance", "status", "actions"])
   );
 
   const canCreate = permissions.includes("customers.create");
@@ -1561,7 +1673,7 @@ const CustomerModule = ({
       <div className="page-heading">
         <div>
           <p className="eyebrow">Digital Account Book</p>
-          <h1>Customers</h1>
+          <h1>Customer Book</h1>
         </div>
         <div className="topbar-actions">
           <button disabled={!canExport} onClick={exportCsv}>
@@ -1587,6 +1699,7 @@ const CustomerModule = ({
       </div>
       <div className="filters customer-filters">
         <input
+          aria-label="Search customers"
           placeholder="Search name, phone, tags, customer ID"
           value={query.search ?? ""}
           onChange={(event) => {
@@ -1594,6 +1707,7 @@ const CustomerModule = ({
           }}
         />
         <select
+          aria-label="Customer status"
           value={query.status}
           onChange={(event) => {
             setQuery({
@@ -1608,6 +1722,7 @@ const CustomerModule = ({
           <option value="all">All</option>
         </select>
         <select
+          aria-label="Customer type"
           value={query.customerType}
           onChange={(event) => {
             setQuery({
@@ -1701,14 +1816,16 @@ const CustomerModule = ({
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} className="state-cell">
+                <td colSpan={visibleColumns.size} className="state-cell">
                   Loading customers...
                 </td>
               </tr>
             ) : customers.length === 0 ? (
               <tr>
-                <td colSpan={9} className="state-cell">
-                  No customers yet. Add your first account-book customer.
+                <td colSpan={visibleColumns.size} className="state-cell">
+                  {query.search || query.status !== "active" || query.customerType !== "all"
+                    ? "No customers match your filters."
+                    : "No customers yet. Add your first customer."}
                 </td>
               </tr>
             ) : (
@@ -1719,12 +1836,28 @@ const CustomerModule = ({
                       <span className="avatar">{initials(customer.name)}</span>
                     </td>
                   ) : null}
-                  {visibleColumns.has("name") ? <td className="strong">{customer.name}</td> : null}
+                  {visibleColumns.has("name") ? (
+                    <td>
+                      <button
+                        className="customer-name-link"
+                        onClick={() => void loadProfile(customer.id)}
+                      >
+                        {customer.name}
+                      </button>
+                    </td>
+                  ) : null}
                   {visibleColumns.has("phone") ? <td>{customer.phone ?? "-"}</td> : null}
                   {visibleColumns.has("city") ? <td>{customer.city ?? "-"}</td> : null}
                   {visibleColumns.has("balance") ? (
                     <td className={customer.outstandingBalanceMinor > 0 ? "money-danger" : ""}>
-                      {money(customer.outstandingBalanceMinor)}
+                      {money(Math.abs(customer.outstandingBalanceMinor))}
+                      <small className="sale-secondary">
+                        {customer.outstandingBalanceMinor < 0
+                          ? "Customer credit"
+                          : customer.outstandingBalanceMinor > 0
+                            ? "To collect"
+                            : "Settled"}
+                      </small>
                     </td>
                   ) : null}
                   {visibleColumns.has("creditLimit") ? (
@@ -1742,7 +1875,7 @@ const CustomerModule = ({
                       <span
                         className={`pill ${customer.status === "active" ? "success" : "muted"}`}
                       >
-                        {customer.status}
+                        {displayLabel(customer.status)}
                       </span>
                     </td>
                   ) : null}
@@ -1801,7 +1934,7 @@ const CustomerModule = ({
           onSave={() => void recordPayment()}
         />
       )}
-      {profile === null ? null : (
+      {profile === null || form !== null || paymentForm !== null ? null : (
         <CustomerProfileDrawer
           customer={profile}
           statement={statement}
@@ -1838,9 +1971,15 @@ const CustomerColumnPicker = ({
   readonly onChange: (visible: Set<string>) => void;
 }) => (
   <select
+    aria-label="Visible customer columns"
     value=""
     onChange={(event) => {
-      if (event.target.value.length === 0) return;
+      if (
+        event.target.value.length === 0 ||
+        event.target.value === "name" ||
+        event.target.value === "actions"
+      )
+        return;
       const next = new Set(visible);
       if (next.has(event.target.value)) next.delete(event.target.value);
       else next.add(event.target.value);
@@ -1849,8 +1988,8 @@ const CustomerColumnPicker = ({
   >
     <option value="">Columns</option>
     {columns.map((column) => (
-      <option key={column} value={column}>
-        {visible.has(column) ? "Hide" : "Show"} {column}
+      <option key={column} value={column} disabled={column === "name" || column === "actions"}>
+        {visible.has(column) ? "Hide" : "Show"} {displayLabel(column)}
       </option>
     ))}
   </select>
@@ -1900,7 +2039,7 @@ const CustomerForm = ({
   const errors = submitted ? customerFormErrors(form) : {};
 
   return (
-    <div className="modal-backdrop">
+    <Dialog label={form.id === undefined ? "New Customer" : "Edit Customer"} onClose={onClose}>
       <section className="modal customer-modal">
         <header>
           <h2>{form.id === undefined ? "New Customer" : "Edit Customer"}</h2>
@@ -2030,7 +2169,7 @@ const CustomerForm = ({
           </button>
         </footer>
       </section>
-    </div>
+    </Dialog>
   );
 };
 
@@ -2049,7 +2188,7 @@ const CustomerPaymentDialog = ({
   const errors = submitted ? paymentFormErrors(form) : {};
 
   return (
-    <div className="modal-backdrop">
+    <Dialog label={"Record customer payment"} onClose={onClose}>
       <section className="modal">
         <header>
           <h2>Record Payment</h2>
@@ -2138,7 +2277,7 @@ const CustomerPaymentDialog = ({
           </button>
         </footer>
       </section>
-    </div>
+    </Dialog>
   );
 };
 
@@ -2171,7 +2310,7 @@ const CustomerProfileDrawer = ({
   readonly onPayment: () => void;
   readonly onClose: () => void;
 }) => (
-  <div className="drawer-backdrop">
+  <Dialog label={`Customer details ${customer.name}`} onClose={onClose} className="drawer-backdrop">
     <aside className="drawer customer-profile">
       <header>
         <div className="customer-profile-head">
@@ -2186,7 +2325,6 @@ const CustomerProfileDrawer = ({
         <button onClick={onClose}>Close</button>
       </header>
       <div className="profile-actions">
-        <button disabled>WhatsApp</button>
         <button disabled={!canPay} onClick={onPayment}>
           Record Payment
         </button>
@@ -2202,26 +2340,30 @@ const CustomerProfileDrawer = ({
         </button>
       </div>
       <div className="profile-stats">
-        <Metric label="Outstanding" value={money(customer.outstandingBalanceMinor)} />
+        <Metric
+          label={customer.outstandingBalanceMinor < 0 ? "Customer credit" : "Amount to collect"}
+          value={money(Math.abs(customer.outstandingBalanceMinor))}
+        />
         <Metric label="Credit Limit" value={money(customer.creditLimitMinor)} />
-        <Metric label="Status" value={customer.status} />
+        <Metric label="Status" value={displayLabel(customer.status)} />
       </div>
       <div className="inventory-tabs">
         {(["overview", "statement", "payments", "notes", "activity"] as const).map((item) => (
           <button
-            className={tab === item ? "active" : ""}
+            className={tab === item ? "primary" : ""}
+            aria-pressed={tab === item}
             key={item}
             onClick={() => {
               setTab(item);
             }}
           >
-            {item === "statement" ? "account book" : item}
+            {item === "statement" ? "Account book" : displayLabel(item)}
           </button>
         ))}
       </div>
       {tab === "overview" ? (
         <section className="detail-section">
-          <Detail label="Customer Type" value={customer.customerType} />
+          <Detail label="Customer Type" value={displayLabel(customer.customerType)} />
           <Detail label="Email" value={customer.email ?? "-"} />
           <Detail label="CNIC" value={customer.cnic ?? "-"} />
           <Detail label="Tags" value={customer.tags.join(", ") || "-"} />
@@ -2266,40 +2408,42 @@ const CustomerProfileDrawer = ({
               {statement === null ? "-" : new Date(statement.generatedAt).toLocaleString("en-PK")}
             </span>
           </div>
-          <table className="statement-table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Reference</th>
-                <th>Description</th>
-                <th>Debit</th>
-                <th>Credit</th>
-                <th>Running Balance</th>
-                <th>User</th>
-              </tr>
-            </thead>
-            <tbody>
-              {statement?.items.length === 0 ? (
+          <div className="table-wrap">
+            <table className="statement-table">
+              <thead>
                 <tr>
-                  <td colSpan={7} className="state-cell">
-                    No account-book entries yet.
-                  </td>
+                  <th>Date</th>
+                  <th>Reference</th>
+                  <th>Description</th>
+                  <th>Debit</th>
+                  <th>Credit</th>
+                  <th>Running Balance</th>
+                  <th>User</th>
                 </tr>
-              ) : (
-                statement?.items.map((line) => (
-                  <tr key={line.id}>
-                    <td>{new Date(line.date).toLocaleDateString("en-PK")}</td>
-                    <td>{line.reference}</td>
-                    <td>{line.description}</td>
-                    <td>{line.debitMinor === 0 ? "-" : money(line.debitMinor)}</td>
-                    <td>{line.creditMinor === 0 ? "-" : money(line.creditMinor)}</td>
-                    <td>{money(line.runningBalanceMinor)}</td>
-                    <td>{line.userName}</td>
+              </thead>
+              <tbody>
+                {statement?.items.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="state-cell">
+                      No account-book entries yet.
+                    </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  statement?.items.map((line) => (
+                    <tr key={line.id}>
+                      <td>{new Date(line.date).toLocaleDateString("en-PK")}</td>
+                      <td>{line.reference}</td>
+                      <td>{line.description}</td>
+                      <td>{line.debitMinor === 0 ? "-" : money(line.debitMinor)}</td>
+                      <td>{line.creditMinor === 0 ? "-" : money(line.creditMinor)}</td>
+                      <td>{money(line.runningBalanceMinor)}</td>
+                      <td>{line.userName}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </section>
       ) : null}
       {tab === "notes" ? (
@@ -2315,16 +2459,16 @@ const CustomerProfileDrawer = ({
           <div className="activity-list">
             {activity.map((item) => (
               <div className="activity-item" key={item.id}>
-                <strong>{item.action}</strong>
+                <strong>{displayLabel(item.action)}</strong>
                 <span>{new Date(item.occurredAt).toLocaleString("en-PK")}</span>
-                <p>{item.details}</p>
+                <p>{activitySummary(item.details)}</p>
               </div>
             ))}
           </div>
         )
       ) : null}
     </aside>
-  </div>
+  </Dialog>
 );
 
 const initials = (name: string): string =>
@@ -2362,8 +2506,17 @@ const PosModule = ({
   const [customers, setCustomers] = useState<readonly CustomerListItemDto[]>([]);
   const [cashRegister, setCashRegister] = useState<CashRegisterDto | null>(null);
   const [salesDashboard, setSalesDashboard] = useState<SalesDashboardDto | null>(null);
-  const [form, setForm] = useState<SaleFormState>(emptySaleForm);
+  const basketKey = `orix.basket.v1.${context?.currentUserId ?? "unknown"}`;
+  const [form, setForm] = useState<SaleFormState>(() => loadBasket(basketKey));
+  const [basketSaved, setBasketSaved] = useState(true);
+  useEffect(() => {
+    setBasketSaved(saveBasket(basketKey, form));
+  }, [basketKey, form]);
   const [search, setSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<readonly ProductListItemDto[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [selectedSearchIndex, setSelectedSearchIndex] = useState(0);
+  const [customerSearch, setCustomerSearch] = useState("");
   const [barcode, setBarcode] = useState("");
   const [receipt, setReceipt] = useState<ReceiptDto | null>(null);
   const [heldSales, setHeldSales] = useState<readonly SaleListItemDto[]>([]);
@@ -2384,14 +2537,14 @@ const PosModule = ({
       await Promise.all([
         window.orix.products.list({
           page: 1,
-          pageSize: 500,
+          pageSize: 50,
           sortBy: "name",
           sortDirection: "asc",
           status: "active"
         }),
         window.orix.customers.list({
           page: 1,
-          pageSize: 500,
+          pageSize: 50,
           sortBy: "name",
           sortDirection: "asc",
           status: "active",
@@ -2401,7 +2554,7 @@ const PosModule = ({
         window.orix.sales.dashboard(),
         window.orix.sales.list({
           page: 1,
-          pageSize: 20,
+          pageSize: 500,
           sortBy: "createdAt",
           sortDirection: "desc",
           status: "held"
@@ -2422,7 +2575,8 @@ const PosModule = ({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        setForm(emptySaleForm);
+        if (form.items.length === 0 || window.confirm("Clear this unsaved basket?"))
+          setForm(emptySaleForm);
       }
       if (event.ctrlKey && event.key.toLowerCase() === "f") {
         event.preventDefault();
@@ -2464,49 +2618,106 @@ const PosModule = ({
   });
 
   const searchTerm = search.trim().toLowerCase();
-  const searchResults =
-    searchTerm.length < 2
-      ? []
-      : products
-          .filter((product) => {
-            const term = search.trim().toLowerCase();
-            return (
-              product.name.toLowerCase().includes(term) ||
-              (product.barcode ?? "").toLowerCase().includes(term) ||
-              (product.categoryName ?? "").toLowerCase().includes(term) ||
-              (product.brandName ?? "").toLowerCase().includes(term)
-            );
-          })
-          .slice(0, 8);
+  useEffect(() => {
+    let cancelled = false;
+    setSelectedSearchIndex(0);
+    if (searchTerm.length < 2) {
+      setSearchResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const timeout = window.setTimeout(() => {
+      void window.orix.products
+        .list({
+          page: 1,
+          pageSize: 12,
+          sortBy: "name",
+          sortDirection: "asc",
+          status: "active",
+          search: search.trim()
+        })
+        .then((response) => {
+          if (cancelled) return;
+          setSearching(false);
+          if (response.ok) setSearchResults(response.value.items);
+          else showToast(response.error.message, "error");
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setSearching(false);
+            showToast("Search failed. Try again.", "error");
+          }
+        });
+    }, 120);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [search, searchTerm.length, showToast]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      void window.orix.customers
+        .list({
+          page: 1,
+          pageSize: 50,
+          sortBy: "name",
+          sortDirection: "asc",
+          status: "active",
+          customerType: "all",
+          search: customerSearch
+        })
+        .then((response) => {
+          if (!cancelled && response.ok)
+            setCustomers((previous) => {
+              const selected = previous.find((customer) => customer.id === form.customerId);
+              return selected &&
+                !response.value.items.some((customer) => customer.id === selected.id)
+                ? [selected, ...response.value.items]
+                : response.value.items;
+            });
+        })
+        .catch(() => {
+          if (!cancelled) showToast("Customer search failed.", "error");
+        });
+    }, 150);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [customerSearch, form.customerId, showToast]);
 
   const addProduct = (product: ProductListItemDto) => {
     if (product.archivedAt !== null || product.status !== "active") {
       showToast("Product is not active.", "error");
       return;
     }
-    const existing = form.items.find((item) => item.productId === product.id);
-    if (existing !== undefined) {
-      updateCartQuantity(product.id, existing.quantity + 1);
-      setSearch("");
-      return;
-    }
-    setForm({
-      ...form,
-      items: [
-        ...form.items,
-        {
-          productId: product.id,
-          productName: product.name,
-          barcode: product.barcode,
-          unitId: product.unitId,
-          quantity: 1,
-          unitPriceMinor: product.salePriceMinor,
-          discountMinor: 0,
-          taxMinor: 0,
-          currentStock: product.currentStock
-        }
-      ]
-    });
+    setProducts((previous) =>
+      previous.some((item) => item.id === product.id) ? previous : [...previous, product]
+    );
+    setForm((previous) => ({
+      ...previous,
+      items: previous.items.some((item) => item.productId === product.id)
+        ? previous.items.map((item) =>
+            item.productId === product.id ? { ...item, quantity: item.quantity + 1 } : item
+          )
+        : [
+            ...previous.items,
+            {
+              productId: product.id,
+              productName: product.name,
+              barcode: product.barcode,
+              unitId: product.unitId,
+              quantity: 1,
+              unitPriceMinor: product.salePriceMinor,
+              discountMinor: 0,
+              taxMinor: 0,
+              currentStock: product.currentStock
+            }
+          ]
+    }));
     setSearch("");
   };
 
@@ -2521,26 +2732,36 @@ const PosModule = ({
     });
   };
 
-  const scanBarcode = () => {
-    const product = products.find((item) => item.barcode === barcode.trim());
-    if (product === undefined) {
-      showToast("No product found for this barcode.", "error");
-      return;
-    }
-    addProduct(product);
+  const scanBarcode = async () => {
+    const scanned = barcode.trim();
+    if (scanned.length === 0 || saleProcessing !== null) return;
     setBarcode("");
+    try {
+      const response = await window.orix.products.list({
+        page: 1,
+        pageSize: 1,
+        sortBy: "name",
+        sortDirection: "asc",
+        status: "active",
+        barcode: scanned
+      });
+      const product = response.ok ? response.value.items[0] : undefined;
+      if (product === undefined) {
+        showToast(`No active item found for barcode ${scanned}.`, "error");
+        return;
+      }
+      addProduct(product);
+    } catch {
+      showToast("Barcode lookup failed. Scan again.", "error");
+    }
   };
 
   const updateBarcode = (value: string) => {
     setBarcode(value);
-    const product = products.find((item) => item.barcode === value.trim());
-    if (product !== undefined) {
-      addProduct(product);
-      setBarcode("");
-    }
   };
 
   const toSalePayload = (): SaleWritePayload => ({
+    operationId: form.operationId,
     customerId: form.customerId || null,
     saleNumber: form.saleNumber || null,
     saleDate: form.saleDate,
@@ -2587,6 +2808,7 @@ const PosModule = ({
   };
 
   const completeSale = async () => {
+    if (saleProcessing !== null) return;
     if (!canComplete) return;
     const blockingMessage = posBlockingMessage(form, totals.totalMinor);
     if (blockingMessage !== null) {
@@ -2596,20 +2818,28 @@ const PosModule = ({
     }
     setSaleProcessing("complete");
     setShowCompleteConfirm(false);
-    const response = await window.orix.sales.complete(toSalePayload());
-    if (response.ok) {
-      setReceipt(response.value.receipt);
-      setForm(emptySaleForm);
-      setLastSaleError(null);
-      setPrintStatus("idle");
-      showToast("Sale completed.");
-      await loadPosData();
-    } else {
-      const message = posSaleErrorMessage(response.error.message, response.error.fields);
-      setLastSaleError(message);
-      showToast(message, "error");
+    try {
+      const response = await window.orix.sales.complete(toSalePayload());
+      if (response.ok) {
+        setReceipt(response.value.receipt);
+        setForm(emptySaleForm);
+        setLastSaleError(null);
+        setPrintStatus("idle");
+        showToast("Sale saved. Ready for the next customer.");
+        document.getElementById("pos-barcode")?.focus();
+        await loadPosData();
+      } else {
+        const message = posSaleErrorMessage(response.error.message, response.error.fields);
+        setLastSaleError(message);
+        showToast(message, "error");
+      }
+    } catch {
+      setLastSaleError(
+        "Connection interrupted. Keep this basket and retry: the same checkout will not be posted twice."
+      );
+    } finally {
+      setSaleProcessing(null);
     }
-    setSaleProcessing(null);
   };
 
   const resumeSale = async (sale: SaleListItemDto) => {
@@ -2621,9 +2851,10 @@ const PosModule = ({
     const detail = response.value;
     setForm({
       id: detail.id,
+      operationId: crypto.randomUUID(),
       customerId: detail.customerId ?? "",
       saleNumber: detail.saleNumber,
-      saleDate: detail.saleDate.slice(0, 16),
+      saleDate: new Date().toISOString(),
       paymentType: detail.paymentType,
       discount: fromMinor(detail.discountMinor),
       tax: fromMinor(detail.taxMinor),
@@ -2673,6 +2904,11 @@ const PosModule = ({
   return (
     <section className="pos-module">
       <div className="pos-left">
+        {!basketSaved ? (
+          <p role="alert" className="counter-error">
+            Basket recovery could not be saved. Hold this sale before leaving the screen.
+          </p>
+        ) : null}
         <div className="pos-register-head card">
           <div className="pos-register-title">
             <span className="pos-register-icon">
@@ -2688,6 +2924,34 @@ const PosModule = ({
               <Icon name="search" />
               <input
                 id="pos-search"
+                aria-label="Search all items"
+                role="combobox"
+                aria-expanded={searchTerm.length >= 2}
+                aria-controls="pos-search-results"
+                aria-activedescendant={
+                  searchResults[selectedSearchIndex]
+                    ? `pos-result-${String(selectedSearchIndex)}`
+                    : undefined
+                }
+                autoComplete="off"
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setSelectedSearchIndex((index) =>
+                      Math.min(index + 1, searchResults.length - 1)
+                    );
+                  }
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setSelectedSearchIndex((index) => Math.max(index - 1, 0));
+                  }
+                  if (event.key === "Enter" && !searching) {
+                    event.preventDefault();
+                    const product = searchResults[selectedSearchIndex];
+                    if (product) addProduct(product);
+                  }
+                  if (event.key === "Escape") setSearch("");
+                }}
                 placeholder="Search item name, barcode, category, brand"
                 value={search}
                 onChange={(event) => {
@@ -2695,13 +2959,23 @@ const PosModule = ({
                 }}
               />
               {searchTerm.length >= 2 ? (
-                <div className="pos-search-dropdown">
+                <div
+                  className="pos-search-dropdown"
+                  id="pos-search-results"
+                  role="listbox"
+                  aria-label="Matching items"
+                >
                   {searchResults.length === 0 ? (
-                    <div className="pos-search-empty">No matching items</div>
+                    <div className="pos-search-empty">
+                      {searching ? "Searching…" : "No matching items"}
+                    </div>
                   ) : (
-                    searchResults.map((product) => (
+                    searchResults.map((product, index) => (
                       <button
                         className="pos-result-item"
+                        id={`pos-result-${String(index)}`}
+                        role="option"
+                        aria-selected={index === selectedSearchIndex}
                         key={product.id}
                         onClick={() => {
                           addProduct(product);
@@ -2728,16 +3002,27 @@ const PosModule = ({
               <Icon name="barcode" />
               <input
                 id="pos-barcode"
+                aria-label="Scan barcode"
+                autoComplete="off"
                 placeholder="Scan barcode"
                 value={barcode}
                 onChange={(event) => {
                   updateBarcode(event.target.value);
                 }}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") scanBarcode();
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void scanBarcode();
+                  }
                 }}
               />
-              <button className="icon-button" aria-label="Add scanned item" onClick={scanBarcode}>
+              <button
+                className="icon-button"
+                aria-label="Add scanned item"
+                onClick={() => {
+                  void scanBarcode();
+                }}
+              >
                 <Icon name="plus" />
               </button>
             </label>
@@ -2763,7 +3048,8 @@ const PosModule = ({
               className="icon-button"
               aria-label="Start new sale"
               onClick={() => {
-                setForm(emptySaleForm);
+                if (form.items.length === 0 || window.confirm("Clear this unsaved basket?"))
+                  setForm(emptySaleForm);
               }}
             >
               <Icon name="refresh" />
@@ -2837,157 +3123,184 @@ const PosModule = ({
         </div>
       </div>
       <aside className="pos-right">
-        <div className="card pos-card pos-customer-card">
-          <h2>
-            <Icon name="user" />
-            Customer
-          </h2>
-          <select
-            id="pos-customer"
-            value={form.customerId}
-            onChange={(event) => {
-              setForm({ ...form, customerId: event.target.value });
-            }}
-          >
-            <option value="">Walk-in Customer</option>
-            {customers.map((customer) => (
-              <option value={customer.id} key={customer.id}>
-                {customer.name} {customer.phone === null ? "" : `· ${customer.phone}`}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="card pos-card totals-card">
-          <div className="pos-total-banner">
-            <span>Total to pay</span>
-            <strong>{money(totals.totalMinor)}</strong>
-          </div>
-          <div className="pos-payment-grid">
-            <Detail label="Subtotal" value={money(totals.subtotalMinor)} />
-            <label>
-              Discount
+        <div className="pos-payment-scroll">
+          <div className="card pos-card pos-customer-card">
+            <h2>
+              <Icon name="user" />
+              Customer
+            </h2>
+            <label className="field-control">
+              <span>Find customer</span>
               <input
-                value={form.discount}
+                value={customerSearch}
+                placeholder="Name or phone"
                 onChange={(event) => {
-                  setForm({ ...form, discount: event.target.value });
+                  setCustomerSearch(event.target.value);
                 }}
               />
             </label>
-            <label>
-              Tax
-              <input
-                value={form.tax}
-                onChange={(event) => {
-                  setForm({ ...form, tax: event.target.value });
-                }}
-              />
-            </label>
-          </div>
-          <label>
-            Payment
             <select
-              value={form.paymentType}
+              id="pos-customer"
+              aria-label="Customer"
+              value={form.customerId}
               onChange={(event) => {
-                setForm({ ...form, paymentType: event.target.value as SalePaymentType });
+                setForm({ ...form, customerId: event.target.value });
               }}
             >
-              <option value="cash">Cash</option>
-              <option value="credit">Credit</option>
-              <option value="mixed">Cash + Credit</option>
+              <option value="">Walk-in Customer</option>
+              {customers.map((customer) => (
+                <option value={customer.id} key={customer.id}>
+                  {customer.name} {customer.phone === null ? "" : `· ${customer.phone}`}
+                </option>
+              ))}
             </select>
-          </label>
-          <label>
-            Cash received
-            <input
-              value={form.cashReceived}
-              onChange={(event) => {
-                setForm({ ...form, cashReceived: event.target.value });
-              }}
-            />
-          </label>
-          <div className="cash-shortcuts">
-            {[
-              ["Exact", totals.totalMinor],
-              ["+100", totals.totalMinor + 10000],
-              ["+500", totals.totalMinor + 50000],
-              ["+1000", totals.totalMinor + 100000]
-            ].map(([label, amount]) => (
-              <button
-                key={label}
-                onClick={() => {
-                  setForm({ ...form, cashReceived: fromMinor(Number(amount)) });
+          </div>
+          <div className="card pos-card totals-card">
+            <div className="pos-total-banner">
+              <span>Total to pay</span>
+              <strong>{money(totals.totalMinor)}</strong>
+            </div>
+            <label>
+              Payment
+              <select
+                value={form.paymentType}
+                onChange={(event) => {
+                  setForm({
+                    ...form,
+                    paymentType: event.target.value as SalePaymentType,
+                    cashReceived: event.target.value === "credit" ? "0" : form.cashReceived
+                  });
                 }}
               >
-                {label}
-              </button>
-            ))}
+                <option value="cash">Cash</option>
+                <option value="credit">Credit</option>
+                <option value="mixed">Cash + Credit</option>
+              </select>
+            </label>
+            <label>
+              Cash received
+              <input
+                inputMode="decimal"
+                disabled={form.paymentType === "credit"}
+                value={form.cashReceived}
+                onChange={(event) => {
+                  setForm({ ...form, cashReceived: event.target.value });
+                }}
+              />
+            </label>
+            <div className="cash-shortcuts">
+              {[
+                ["Exact", totals.totalMinor],
+                ["+100", totals.totalMinor + 10000],
+                ["+500", totals.totalMinor + 50000],
+                ["+1000", totals.totalMinor + 100000]
+              ].map(([label, amount]) => (
+                <button
+                  key={label}
+                  disabled={form.paymentType === "credit"}
+                  onClick={() => {
+                    setForm({ ...form, cashReceived: fromMinor(Number(amount)) });
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {blockingMessage === null && lastSaleError === null ? (
+              <div className="pos-ready-note">
+                <Icon name="receipt" />
+                Ready for checkout
+              </div>
+            ) : (
+              <div className="pos-warning-note">{blockingMessage ?? lastSaleError}</div>
+            )}
+            <details className="pos-adjustments">
+              <summary>Discount, tax & notes</summary>
+              <div className="pos-payment-grid">
+                <Detail label="Subtotal" value={money(totals.subtotalMinor)} />
+                <label>
+                  Discount
+                  <input
+                    value={form.discount}
+                    onChange={(event) => {
+                      setForm({ ...form, discount: event.target.value });
+                    }}
+                  />
+                </label>
+                <label>
+                  Tax
+                  <input
+                    value={form.tax}
+                    onChange={(event) => {
+                      setForm({ ...form, tax: event.target.value });
+                    }}
+                  />
+                </label>
+              </div>
+              <textarea
+                placeholder="Sale notes"
+                aria-label="Sale notes"
+                value={form.notes}
+                onChange={(event) => {
+                  setForm({ ...form, notes: event.target.value });
+                }}
+              />
+            </details>
           </div>
+          <div className="pos-insight-strip">
+            <div>
+              <Icon name="cash" />
+              <span>Cash Drawer</span>
+              <strong>{money(cashRegister?.expectedCashMinor ?? 0)}</strong>
+            </div>
+            <div>
+              <Icon name="clock" />
+              <span>Sales Today</span>
+              <strong>{salesDashboard?.salesCount ?? 0}</strong>
+            </div>
+          </div>
+        </div>
+        <div className="pos-actions card">
           <div className="pos-change-row">
             <Detail label="Change" value={money(change)} />
             <Detail label="Credit" value={money(creditBalance)} />
           </div>
-          {blockingMessage === null && lastSaleError === null ? (
-            <div className="pos-ready-note">
-              <Icon name="receipt" />
-              Ready for checkout
-            </div>
-          ) : (
-            <div className="pos-warning-note">{blockingMessage ?? lastSaleError}</div>
-          )}
-          <textarea
-            placeholder="Sale notes"
-            value={form.notes}
-            onChange={(event) => {
-              setForm({ ...form, notes: event.target.value });
+          <button disabled={!canCreate || saleProcessing !== null} onClick={() => void holdSale()}>
+            <Icon name="pause" />
+            {saleProcessing === "hold" ? "Holding" : "Hold"}
+          </button>
+          <button
+            disabled={saleProcessing !== null}
+            onClick={() => {
+              setShowHeld(true);
             }}
-          />
-          <div className="pos-actions">
-            <button
-              disabled={!canCreate || saleProcessing !== null}
-              onClick={() => void holdSale()}
-            >
-              <Icon name="pause" />
-              {saleProcessing === "hold" ? "Holding" : "Hold"}
-            </button>
-            <button
-              disabled={saleProcessing !== null}
-              onClick={() => {
-                setShowHeld(true);
-              }}
-            >
-              <Icon name="play" />
-              Held {heldSales.length > 0 ? `(${String(heldSales.length)})` : ""}
-            </button>
-            <button
-              className="primary"
-              disabled={!canComplete || saleProcessing !== null || blockingMessage !== null}
-              onClick={() => {
-                setShowCompleteConfirm(true);
-              }}
-            >
-              <Icon name="receipt" />
-              {saleProcessing === "complete" ? "Completing" : "Complete Sale"}
-            </button>
-          </div>
-        </div>
-        <div className="pos-insight-strip">
-          <div>
-            <Icon name="cash" />
-            <span>Cash Drawer</span>
-            <strong>{money(cashRegister?.expectedCashMinor ?? 0)}</strong>
-          </div>
-          <div>
-            <Icon name="clock" />
-            <span>Sales Today</span>
-            <strong>{salesDashboard?.salesCount ?? 0}</strong>
-          </div>
+          >
+            <Icon name="play" />
+            Held {heldSales.length > 0 ? `(${String(heldSales.length)})` : ""}
+          </button>
+          <button
+            className="primary"
+            disabled={!canComplete || saleProcessing !== null || blockingMessage !== null}
+            onClick={() => {
+              setShowCompleteConfirm(true);
+            }}
+          >
+            <Icon name="receipt" />
+            {saleProcessing === "complete" ? "Completing" : "Complete Sale"}
+          </button>
         </div>
       </aside>
       <footer className="shortcut-bar">
         F8 Complete · F4 Hold · F5 Held Sales · F2 Customer · Ctrl+B Barcode · Ctrl+F Search
       </footer>
       {showCompleteConfirm ? (
-        <div className="modal-backdrop">
+        <Dialog
+          label="Confirm sale"
+          onClose={() => {
+            setShowCompleteConfirm(false);
+          }}
+        >
           <section className="modal sale-confirm-modal">
             <header>
               <div>
@@ -3045,7 +3358,7 @@ const PosModule = ({
               </button>
             </footer>
           </section>
-        </div>
+        </Dialog>
       ) : null}
       {showHeld ? (
         <div className="modal-backdrop">
@@ -3109,6 +3422,7 @@ const PosModule = ({
           onClose={() => {
             setReceipt(null);
             setPrintStatus("idle");
+            requestAnimationFrame(() => document.getElementById("pos-barcode")?.focus());
           }}
         />
       )}
@@ -3157,7 +3471,7 @@ const ReceiptPreview = ({
   );
 
   return (
-    <div className="modal-backdrop">
+    <Dialog label="Receipt preview" onClose={onClose}>
       <section className="modal receipt-modal">
         <header>
           <div>
@@ -3170,9 +3484,7 @@ const ReceiptPreview = ({
         </header>
         <div className="receipt-success">
           <Icon name="receipt" />
-          <span>
-            {printStatus === "sent" ? "Receipt sent to system printer" : "Sale saved successfully"}
-          </span>
+          <span>{printStatus === "sent" ? "Print dialog opened" : "Sale saved successfully"}</span>
           <strong>{money(receipt.totalMinor)}</strong>
         </div>
         <div className="receipt-paper">
@@ -3220,7 +3532,7 @@ const ReceiptPreview = ({
             <ReceiptDetail label="Total" value={money(receipt.totalMinor)} strong />
             <ReceiptDetail label="Paid" value={money(receipt.paidMinor)} />
             <ReceiptDetail label="Change" value={money(receipt.changeDueMinor)} />
-            <ReceiptDetail label="Payment" value={receipt.paymentType} />
+            <ReceiptDetail label="Payment" value={displayLabel(receipt.paymentType)} />
           </div>
           <div className="receipt-center receipt-footer">
             <span>{footer}</span>
@@ -3229,7 +3541,9 @@ const ReceiptPreview = ({
           </div>
         </div>
         <footer>
-          <button onClick={onClose}>New Sale</button>
+          <button data-autofocus onClick={onClose}>
+            New Sale
+          </button>
           <button
             className="primary"
             disabled={!canPrint}
@@ -3243,7 +3557,7 @@ const ReceiptPreview = ({
           </button>
         </footer>
       </section>
-    </div>
+    </Dialog>
   );
 };
 
@@ -3262,6 +3576,9 @@ const ReceiptDetail = ({
   </div>
 );
 
+const saleReturnLabel = (status: "none" | "partial" | "full") =>
+  status === "full" ? "Fully returned" : status === "partial" ? "Partially returned" : "No returns";
+
 const SalesModule = ({
   context,
   permissions,
@@ -3273,6 +3590,10 @@ const SalesModule = ({
   readonly settings: AppSettingsDto | null;
   readonly showToast: (message: string, tone?: ToastState["tone"]) => void;
 }) => {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const listRequest = useRef(0);
+  const detailRequest = useRef(0);
   const [sales, setSales] = useState<readonly SaleListItemDto[]>([]);
   const [query, setQuery] = useState<SaleListRequest>({
     page: 1,
@@ -3287,26 +3608,62 @@ const SalesModule = ({
   const canPrint = permissions.includes("sales.print");
   const canReturn = permissions.includes("sales.return");
   const [returnForm, setReturnForm] = useState<SaleReturnFormState | null>(null);
+  const [returnBusy, setReturnBusy] = useState(false);
+  const [returnError, setReturnError] = useState<string | null>(null);
+  const returnInFlight = useRef(false);
   const totalPages = Math.max(1, Math.ceil(totalItems / query.pageSize));
 
   const loadSales = useCallback(async () => {
-    const response = await window.orix.sales.list(query);
-    if (response.ok) {
-      setSales(response.value.items);
-      setTotalItems(response.value.totalItems);
-    } else {
-      showToast(response.error.message, "error");
+    const request = ++listRequest.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await window.orix.sales.list(query);
+      if (request !== listRequest.current) return;
+      if (response.ok) {
+        setSales(response.value.items);
+        setTotalItems(response.value.totalItems);
+      } else {
+        setError(response.error.message);
+        setSales([]);
+        setTotalItems(0);
+      }
+    } catch {
+      if (request === listRequest.current) {
+        setError("Unable to load sales. Please try Refresh.");
+        setSales([]);
+        setTotalItems(0);
+      }
+    } finally {
+      if (request === listRequest.current) setLoading(false);
     }
-  }, [query, showToast]);
+  }, [query]);
 
   useEffect(() => {
     void loadSales();
+    return () => {
+      ++listRequest.current;
+    };
   }, [loadSales]);
 
+  useEffect(
+    () => () => {
+      ++detailRequest.current;
+    },
+    []
+  );
+
   const loadDetail = async (id: string) => {
-    const response = await window.orix.sales.get(id);
-    if (response.ok && response.value !== undefined) setDetail(response.value);
-    else showToast(response.ok ? "Sale was not found." : response.error.message, "error");
+    const request = ++detailRequest.current;
+    try {
+      const response = await window.orix.sales.get(id);
+      if (request !== detailRequest.current) return;
+      if (response.ok && response.value !== undefined) setDetail(response.value);
+      else showToast(response.ok ? "Sale was not found." : response.error.message, "error");
+    } catch {
+      if (request === detailRequest.current)
+        showToast("Unable to load sale details. Please try again.", "error");
+    }
   };
 
   const reprint = async (id: string) => {
@@ -3322,10 +3679,12 @@ const SalesModule = ({
       return;
     }
     const sale = response.value;
+    setReturnError(null);
     setReturnForm({
       sale,
       reason: "",
-      refundMethod: sale.customerId === null ? "cash" : "customer-credit",
+      refundMethod:
+        sale.paymentType === "cash" || sale.customerId === null ? "cash" : "customer-credit",
       quantities: Object.fromEntries(
         sale.items
           .filter((item) => item.quantity - item.returnedQuantity > 0)
@@ -3336,7 +3695,14 @@ const SalesModule = ({
   };
 
   const submitReturn = async () => {
-    if (returnForm === null) return;
+    if (returnForm === null || returnInFlight.current) return;
+    if (
+      !returnPreview(returnForm.sale, returnForm.quantities).valid ||
+      returnForm.reason.trim().length < 3
+    ) {
+      setReturnError("Choose valid quantities and enter a reason of at least 3 characters.");
+      return;
+    }
     const items = returnForm.sale.items
       .map((item) => ({
         saleItemId: item.id,
@@ -3350,28 +3716,43 @@ const SalesModule = ({
       refundMethod: returnForm.refundMethod,
       items
     };
-    const response = await window.orix.sales.returnSale(payload);
-    if (response.ok) {
-      setReturnForm(null);
-      showToast(`Return ${response.value.return.returnNumber} posted.`);
-      await loadSales();
-      await loadDetail(returnForm.sale.id);
-    } else {
-      showToast(response.error.message, "error");
+    returnInFlight.current = true;
+    setReturnBusy(true);
+    setReturnError(null);
+    try {
+      const response = await window.orix.sales.returnSale(payload);
+      if (response.ok) {
+        setReturnForm(null);
+        showToast(`Return ${response.value.return.returnNumber} posted.`);
+        await loadSales();
+        await loadDetail(returnForm.sale.id);
+      } else {
+        setReturnError(response.error.message);
+      }
+    } catch {
+      setReturnError(
+        "Return status could not be confirmed. Check the sale's returned quantities before trying again."
+      );
+    } finally {
+      returnInFlight.current = false;
+      setReturnBusy(false);
     }
   };
 
   return (
-    <section className="page-stack">
+    <section className="page-stack sales-module">
       <div className="page-heading">
         <div>
           <p className="eyebrow">Sales Register</p>
-          <h1>Sales</h1>
+          <h1>Sales History</h1>
         </div>
-        <button onClick={() => void loadSales()}>Refresh</button>
+        <button disabled={loading} onClick={() => void loadSales()}>
+          Refresh
+        </button>
       </div>
       <div className="filters customer-filters">
         <input
+          aria-label="Search sales"
           placeholder="Search invoice or customer"
           value={query.search ?? ""}
           onChange={(event) => {
@@ -3379,6 +3760,7 @@ const SalesModule = ({
           }}
         />
         <select
+          aria-label="Sale status"
           value={query.status}
           onChange={(event) => {
             setQuery({
@@ -3388,67 +3770,76 @@ const SalesModule = ({
             });
           }}
         >
-          <option value="all">All</option>
+          <option value="all">All statuses</option>
           <option value="held">Held</option>
           <option value="draft">Draft</option>
           <option value="completed">Completed</option>
           <option value="cancelled">Cancelled</option>
         </select>
       </div>
-      <div className="table-wrap customer-table">
+      {error !== null ? <p role="alert">{error}</p> : null}
+      <div className="table-wrap customer-table" aria-busy={loading}>
         <table>
           <thead>
             <tr>
-              <th>Invoice</th>
-              <th>Customer</th>
+              <th>Invoice / customer</th>
               <th>Date</th>
-              <th>Items</th>
-              <th>Total</th>
-              <th>Paid</th>
-              <th>Payment</th>
+              <th>Sale total</th>
               <th>Status</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {sales.length === 0 ? (
+            {loading ? (
               <tr>
-                <td colSpan={9} className="state-cell">
-                  No sales yet.
+                <td colSpan={5} className="state-cell" role="status">
+                  Loading sales…
+                </td>
+              </tr>
+            ) : sales.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="state-cell">
+                  {error !== null
+                    ? "Sales unavailable. Try Refresh."
+                    : query.search || query.status !== "all"
+                      ? "No sales match your filters."
+                      : "No sales yet."}
                 </td>
               </tr>
             ) : (
               sales.map((sale) => (
                 <tr key={sale.id} onDoubleClick={() => void loadDetail(sale.id)}>
-                  <td className="strong">{sale.saleNumber}</td>
-                  <td>{sale.customerName ?? "Walk-in"}</td>
-                  <td>{new Date(sale.saleDate).toLocaleDateString("en-PK")}</td>
-                  <td>{sale.itemCount}</td>
-                  <td>{money(sale.totalMinor)}</td>
-                  <td>{money(sale.paidMinor)}</td>
-                  <td>{sale.paymentType}</td>
+                  <td>
+                    <button className="sale-invoice-link" onClick={() => void loadDetail(sale.id)}>
+                      {sale.saleNumber}
+                    </button>
+                    <span className="sale-secondary">{sale.customerName ?? "Walk-in"}</span>
+                    <small className="sale-secondary">
+                      {sale.itemCount} {sale.itemCount === 1 ? "item" : "items"}
+                    </small>
+                  </td>
+                  <td>
+                    <span className="sales-mobile-label">Date</span>
+                    {new Date(sale.saleDate).toLocaleDateString("en-PK")}
+                  </td>
+                  <td className="sale-value">
+                    <span className="sales-mobile-label">Sale total</span>
+                    <strong>{money(sale.totalMinor)}</strong>
+                  </td>
                   <td>
                     <span
-                      className={`pill ${sale.status === "completed" ? "success" : sale.status === "cancelled" ? "danger" : "warning"}`}
+                      className={`pill ${sale.status === "cancelled" ? "danger" : sale.status === "completed" && sale.returnStatus === "none" ? "success" : "warning"}`}
                     >
-                      {sale.status}
+                      {sale.status === "completed"
+                        ? sale.returnStatus === "none"
+                          ? "Sold"
+                          : saleReturnLabel(sale.returnStatus)
+                        : displayLabel(sale.status)}
                     </span>
                   </td>
                   <td>
                     <div className="row-actions">
-                      <button onClick={() => void loadDetail(sale.id)}>View</button>
-                      <button
-                        disabled={!canPrint || sale.status !== "completed"}
-                        onClick={() => void reprint(sale.id)}
-                      >
-                        Reprint
-                      </button>
-                      <button
-                        disabled={!canReturn || sale.status !== "completed"}
-                        onClick={() => void openReturn(sale.id)}
-                      >
-                        Return
-                      </button>
+                      <button onClick={() => void loadDetail(sale.id)}>View details</button>
                     </div>
                   </td>
                 </tr>
@@ -3467,7 +3858,26 @@ const SalesModule = ({
       {detail === null ? null : (
         <SaleDetailsDrawer
           sale={detail}
+          onReprint={
+            canPrint && detail.status === "completed"
+              ? () => {
+                  const id = detail.id;
+                  setDetail(null);
+                  void reprint(id);
+                }
+              : undefined
+          }
+          onReturn={
+            canReturn && detail.status === "completed" && detail.returnStatus !== "full"
+              ? () => {
+                  const id = detail.id;
+                  setDetail(null);
+                  void openReturn(id);
+                }
+              : undefined
+          }
           onClose={() => {
+            ++detailRequest.current;
             setDetail(null);
           }}
         />
@@ -3488,9 +3898,11 @@ const SalesModule = ({
       {returnForm === null ? null : (
         <SaleReturnDialog
           form={returnForm}
+          busy={returnBusy}
+          error={returnError}
           onChange={setReturnForm}
           onClose={() => {
-            setReturnForm(null);
+            if (!returnInFlight.current) setReturnForm(null);
           }}
           onSubmit={() => void submitReturn()}
         />
@@ -3501,13 +3913,17 @@ const SalesModule = ({
 
 const SaleDetailsDrawer = ({
   sale,
+  onReprint,
+  onReturn,
   onClose
 }: {
   readonly sale: SaleDetailDto;
+  readonly onReprint: (() => void) | undefined;
+  readonly onReturn: (() => void) | undefined;
   readonly onClose: () => void;
 }) => (
-  <div className="drawer-backdrop">
-    <aside className="drawer customer-profile">
+  <Dialog label={`Sale details ${sale.saleNumber}`} className="drawer-backdrop" onClose={onClose}>
+    <aside className="drawer customer-profile sale-details-drawer">
       <header>
         <div>
           <p className="eyebrow">Sale Details</p>
@@ -3516,68 +3932,82 @@ const SaleDetailsDrawer = ({
         </div>
         <button onClick={onClose}>Close</button>
       </header>
+      <div className="profile-actions">
+        {onReprint ? <button onClick={onReprint}>Reprint receipt</button> : null}
+        {onReturn ? (
+          <button className="primary" onClick={onReturn}>
+            Return items
+          </button>
+        ) : null}
+      </div>
       <div className="profile-stats">
-        <Metric label="Total" value={money(sale.totalMinor)} />
-        <Metric label="Paid" value={money(sale.paidMinor)} />
-        <Metric label="Status" value={sale.status} />
+        <Metric label="Original total" value={money(sale.totalMinor)} />
+        <Metric label="Returned amount" value={money(sale.refundedMinor)} />
+        <Metric label="Net after returns" value={money(sale.netTotalMinor)} />
+        <Metric label="Originally collected" value={money(sale.paidMinor)} />
+        <Metric label="Return status" value={saleReturnLabel(sale.returnStatus)} />
       </div>
       <section className="detail-section">
+        <Detail label="Sale status" value={displayLabel(sale.status)} />
+        <Detail label="Sale date" value={new Date(sale.saleDate).toLocaleString()} />
         <Detail label="Cashier" value={sale.cashierName} />
-        <Detail label="Payment" value={sale.paymentType} />
+        <Detail label="Payment" value={displayLabel(sale.paymentType)} />
         <Detail label="Change" value={money(sale.changeDueMinor)} />
         <Detail label="Notes" value={sale.notes ?? "-"} />
       </section>
-      <table className="statement-table">
-        <thead>
-          <tr>
-            <th>Product</th>
-            <th>Qty</th>
-            <th>Rate</th>
-            <th>Discount</th>
-            <th>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sale.items.map((item) => (
-            <tr key={item.id}>
-              <td>{item.productName}</td>
-              <td>{item.quantity}</td>
-              <td>{money(item.unitPriceMinor)}</td>
-              <td>{money(item.discountMinor)}</td>
-              <td>{money(item.lineTotalMinor)}</td>
+      <div className="table-wrap">
+        <table className="statement-table">
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Sold</th>
+              <th>Returned</th>
+              <th>Remaining</th>
+              <th>Rate</th>
+              <th>Discount</th>
+              <th>Total</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {sale.items.map((item) => (
+              <tr key={item.id}>
+                <td>{item.productName}</td>
+                <td>{item.quantity}</td>
+                <td>{item.returnedQuantity}</td>
+                <td>{item.quantity - item.returnedQuantity}</td>
+                <td>{money(item.unitPriceMinor)}</td>
+                <td>{money(item.discountMinor)}</td>
+                <td>{money(item.lineTotalMinor)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </aside>
-  </div>
+  </Dialog>
 );
 
 const SaleReturnDialog = ({
   form,
+  busy,
+  error,
   onChange,
   onClose,
   onSubmit
 }: {
+  readonly busy: boolean;
+  readonly error: string | null;
   readonly form: SaleReturnFormState;
   readonly onChange: (form: SaleReturnFormState) => void;
   readonly onClose: () => void;
   readonly onSubmit: () => void;
 }) => {
-  const selectedItems = form.sale.items
-    .map((item) => ({
-      item,
-      quantity: Number(form.quantities[item.id] ?? "0"),
-      condition: form.conditions[item.id] ?? "sellable"
-    }))
-    .filter((entry) => entry.quantity > 0);
-  const totalMinor = selectedItems.reduce(
-    (total, entry) => total + entry.quantity * entry.item.unitPriceMinor,
-    0
-  );
-  const canSubmit = form.reason.trim().length >= 3 && totalMinor > 0;
+  const { totalMinor } = returnPreview(form.sale, form.quantities);
+  const blockingMessage = returnBlockingMessage(form.sale, form.quantities, form.reason);
+  const guidanceId = useId();
+  const canSubmit = !busy && blockingMessage === null;
   return (
-    <div className="modal-backdrop">
+    <Dialog label={`Return sale ${form.sale.saleNumber}`} onClose={onClose}>
       <section className="modal return-modal">
         <header>
           <div>
@@ -3585,90 +4015,119 @@ const SaleReturnDialog = ({
             <h2>{form.sale.saleNumber}</h2>
             <span>{form.sale.customerName ?? "Walk-in Customer"}</span>
           </div>
-          <button onClick={onClose}>Close</button>
+          <button disabled={busy} onClick={onClose}>
+            Close
+          </button>
         </header>
-        <div className="return-summary">
-          <Metric label="Refund" value={money(totalMinor)} />
-          <label>
-            Refund Method
-            <select
-              value={form.refundMethod}
-              onChange={(event) => {
-                onChange({
-                  ...form,
-                  refundMethod: event.target.value as SaleReturnPayload["refundMethod"]
-                });
-              }}
-            >
-              <option value="cash">Cash refund</option>
-              <option value="customer-credit" disabled={form.sale.customerId === null}>
-                Reduce customer balance
-              </option>
-            </select>
-          </label>
-        </div>
-        <div className="return-lines">
-          {form.sale.items.map((item) => {
-            const available = item.quantity - item.returnedQuantity;
-            return (
-              <div className="return-line" key={item.id}>
-                <div>
-                  <strong>{item.productName}</strong>
-                  <span>
-                    Sold {item.quantity} · Returned {item.returnedQuantity} · Available {available}
-                  </span>
+        <fieldset disabled={busy} className="return-fields">
+          <div className="return-summary">
+            <Metric label="Refund" value={money(totalMinor)} />
+            <label>
+              Refund Method
+              <select
+                value={form.refundMethod}
+                onChange={(event) => {
+                  onChange({
+                    ...form,
+                    refundMethod: event.target.value as SaleReturnPayload["refundMethod"]
+                  });
+                }}
+              >
+                <option value="cash">Cash refund</option>
+                <option value="customer-credit" disabled={form.sale.customerId === null}>
+                  Credit customer account
+                </option>
+              </select>
+            </label>
+          </div>
+          <p className="return-help">
+            Refund includes the original discounts and tax. Enter only the quantity being returned
+            now.
+          </p>
+          <div className="return-lines">
+            {form.sale.items.map((item) => {
+              const available = item.quantity - item.returnedQuantity;
+              return (
+                <div className="return-line" key={item.id}>
+                  <div>
+                    <strong>{item.productName}</strong>
+                    <span>
+                      Sold {item.quantity} · Returned {item.returnedQuantity} · Available{" "}
+                      {available}
+                    </span>
+                  </div>
+                  <label>
+                    Return quantity
+                    <input
+                      aria-label={`Return quantity for ${item.productName}`}
+                      aria-describedby={guidanceId}
+                      type="number"
+                      step="any"
+                      min={0}
+                      max={available}
+                      value={form.quantities[item.id] ?? "0"}
+                      disabled={available <= 0}
+                      onChange={(event) => {
+                        onChange({
+                          ...form,
+                          quantities: { ...form.quantities, [item.id]: event.target.value }
+                        });
+                      }}
+                    />
+                  </label>
+                  <label>
+                    Stock handling
+                    <select
+                      aria-label={`Stock handling for ${item.productName}`}
+                      value={form.conditions[item.id] ?? "sellable"}
+                      disabled={available <= 0}
+                      onChange={(event) => {
+                        onChange({
+                          ...form,
+                          conditions: {
+                            ...form.conditions,
+                            [item.id]: event.target.value as SaleReturnCondition
+                          }
+                        });
+                      }}
+                    >
+                      <option value="sellable">Return to stock</option>
+                      <option value="damaged">Do not restock</option>
+                    </select>
+                  </label>
                 </div>
-                <input
-                  type="number"
-                  min={0}
-                  max={available}
-                  value={form.quantities[item.id] ?? "0"}
-                  disabled={available <= 0}
-                  onChange={(event) => {
-                    onChange({
-                      ...form,
-                      quantities: { ...form.quantities, [item.id]: event.target.value }
-                    });
-                  }}
-                />
-                <select
-                  value={form.conditions[item.id] ?? "sellable"}
-                  disabled={available <= 0}
-                  onChange={(event) => {
-                    onChange({
-                      ...form,
-                      conditions: {
-                        ...form.conditions,
-                        [item.id]: event.target.value as SaleReturnCondition
-                      }
-                    });
-                  }}
-                >
-                  <option value="sellable">Return to stock</option>
-                  <option value="damaged">Do not restock</option>
-                </select>
-              </div>
-            );
-          })}
-        </div>
-        <label>
-          Reason *
-          <textarea
-            value={form.reason}
-            placeholder="Example: Customer returned damaged item"
-            onChange={(event) => {
-              onChange({ ...form, reason: event.target.value });
-            }}
-          />
-        </label>
+              );
+            })}
+          </div>
+          <label>
+            Reason *
+            <textarea
+              value={form.reason}
+              placeholder="Example: Customer returned damaged item"
+              onChange={(event) => {
+                onChange({ ...form, reason: event.target.value });
+              }}
+            />
+          </label>
+        </fieldset>
+        <p id={guidanceId} className="return-help" role="status">
+          {busy ? "Posting return…" : (blockingMessage ?? "Ready to post this return.")}
+        </p>
+        {error !== null ? (
+          <p className="return-help" role="alert">
+            {error}
+          </p>
+        ) : null}
         <footer>
-          <button onClick={onClose}>Back</button>
+          <button disabled={busy} onClick={onClose}>
+            Back
+          </button>
           <button className="primary" disabled={!canSubmit} onClick={onSubmit}>
-            Post Return
+            {busy ? "Posting…" : "Post Return"}
           </button>
         </footer>
       </section>
-    </div>
+    </Dialog>
   );
 };
 
@@ -3958,6 +4417,7 @@ const SupplierModule = ({
       </div>
       <div className="filters customer-filters">
         <input
+          aria-label="Search suppliers"
           placeholder="Search supplier, phone, NTN, STRN, tags"
           value={query.search ?? ""}
           onChange={(event) => {
@@ -3965,6 +4425,7 @@ const SupplierModule = ({
           }}
         />
         <select
+          aria-label="Supplier status"
           value={query.status}
           onChange={(event) => {
             setQuery({
@@ -3983,13 +4444,9 @@ const SupplierModule = ({
         <table>
           <thead>
             <tr>
-              <th>Avatar</th>
               <th>Supplier</th>
               <th>Phone</th>
-              <th>City</th>
-              <th>Outstanding</th>
-              <th>Terms</th>
-              <th>Last Purchase</th>
+              <th>Balance</th>
               <th>Status</th>
               <th>Actions</th>
             </tr>
@@ -3997,37 +4454,43 @@ const SupplierModule = ({
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} className="state-cell">
+                <td colSpan={5} className="state-cell">
                   Loading suppliers...
                 </td>
               </tr>
             ) : suppliers.length === 0 ? (
               <tr>
-                <td colSpan={9} className="state-cell">
-                  No suppliers yet. Add your first vendor account.
+                <td colSpan={5} className="state-cell">
+                  {query.search || query.status !== "active"
+                    ? "No suppliers match your filters."
+                    : "No suppliers yet. Add your first supplier."}
                 </td>
               </tr>
             ) : (
               suppliers.map((supplier) => (
                 <tr key={supplier.id} onDoubleClick={() => void loadProfile(supplier.id)}>
                   <td>
-                    <span className="avatar">{initials(supplier.name)}</span>
+                    <button
+                      className="customer-name-link supplier-name-link"
+                      onClick={() => void loadProfile(supplier.id)}
+                    >
+                      {supplier.name}
+                    </button>
                   </td>
-                  <td className="strong">{supplier.name}</td>
-                  <td>{supplier.phone ?? "-"}</td>
-                  <td>{supplier.city ?? "-"}</td>
+                  <td>{supplier.phone ?? "No phone"}</td>
                   <td className={supplier.outstandingBalanceMinor > 0 ? "money-danger" : ""}>
-                    {money(supplier.outstandingBalanceMinor)}
-                  </td>
-                  <td>{supplier.creditTerms ?? "-"}</td>
-                  <td>
-                    {supplier.lastPurchaseAt === null
-                      ? "-"
-                      : new Date(supplier.lastPurchaseAt).toLocaleDateString("en-PK")}
+                    {money(Math.abs(supplier.outstandingBalanceMinor))}
+                    <small className="sale-secondary">
+                      {supplier.outstandingBalanceMinor > 0
+                        ? "To pay"
+                        : supplier.outstandingBalanceMinor < 0
+                          ? "Credit with supplier"
+                          : "Settled"}
+                    </small>
                   </td>
                   <td>
                     <span className={`pill ${supplier.status === "active" ? "success" : "muted"}`}>
-                      {supplier.status}
+                      {displayLabel(supplier.status)}
                     </span>
                   </td>
                   <td>
@@ -4080,7 +4543,7 @@ const SupplierModule = ({
           onSave={() => void recordPayment()}
         />
       )}
-      {profile === null ? null : (
+      {profile === null || form !== null || paymentForm !== null ? null : (
         <SupplierProfileDrawer
           supplier={profile}
           statement={statement}
@@ -4124,7 +4587,7 @@ const SupplierForm = ({
   const errors = submitted ? supplierFormErrors(form) : {};
 
   return (
-    <div className="modal-backdrop">
+    <Dialog label={form.id === undefined ? "New Supplier" : "Edit Supplier"} onClose={onClose}>
       <section className="modal customer-modal">
         <header>
           <div>
@@ -4253,7 +4716,7 @@ const SupplierForm = ({
           </button>
         </footer>
       </section>
-    </div>
+    </Dialog>
   );
 };
 
@@ -4272,7 +4735,7 @@ const SupplierPaymentDialog = ({
   const errors = submitted ? paymentFormErrors(form) : {};
 
   return (
-    <div className="modal-backdrop">
+    <Dialog label={"Record supplier payment"} onClose={onClose}>
       <section className="modal customer-modal">
         <header>
           <div>
@@ -4368,7 +4831,7 @@ const SupplierPaymentDialog = ({
           </button>
         </footer>
       </section>
-    </div>
+    </Dialog>
   );
 };
 
@@ -4399,7 +4862,7 @@ const SupplierProfileDrawer = ({
   readonly onPayment: () => void;
   readonly onClose: () => void;
 }) => (
-  <div className="drawer-backdrop">
+  <Dialog label={`Supplier details ${supplier.name}`} onClose={onClose} className="drawer-backdrop">
     <aside className="drawer customer-profile">
       <header>
         <div className="customer-profile-head">
@@ -4429,26 +4892,38 @@ const SupplierProfileDrawer = ({
         </button>
       </div>
       <div className="profile-stats">
-        <Metric label="Outstanding" value={money(supplier.outstandingBalanceMinor)} />
+        <Metric
+          label={supplier.outstandingBalanceMinor < 0 ? "Credit with supplier" : "Amount to pay"}
+          value={money(Math.abs(supplier.outstandingBalanceMinor))}
+        />
         <Metric label="Credit Terms" value={supplier.creditTerms ?? "-"} />
-        <Metric label="Status" value={supplier.status} />
+        <Metric label="Status" value={displayLabel(supplier.status)} />
       </div>
       <div className="inventory-tabs">
         {(["overview", "statement", "payments", "purchases", "activity"] as const).map((item) => (
           <button
-            className={tab === item ? "active" : ""}
+            className={tab === item ? "primary" : ""}
+            aria-pressed={tab === item}
             key={item}
             onClick={() => {
               setTab(item);
             }}
           >
-            {item}
+            {item === "statement" ? "Account book" : displayLabel(item)}
           </button>
         ))}
       </div>
       {tab === "overview" ? (
         <section className="detail-section">
           <Detail label="Email" value={supplier.email ?? "-"} />
+          <Detail
+            label="Last purchase"
+            value={
+              supplier.lastPurchaseAt === null
+                ? "No purchases yet"
+                : new Date(supplier.lastPurchaseAt).toLocaleDateString("en-PK")
+            }
+          />
           <Detail label="NTN" value={supplier.ntn ?? "-"} />
           <Detail label="STRN" value={supplier.strn ?? "-"} />
           <Detail label="Tags" value={supplier.tags.join(", ") || "-"} />
@@ -4494,40 +4969,42 @@ const SupplierProfileDrawer = ({
               {statement === null ? "-" : new Date(statement.generatedAt).toLocaleString("en-PK")}
             </span>
           </div>
-          <table className="statement-table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Reference</th>
-                <th>Description</th>
-                <th>Debit</th>
-                <th>Credit</th>
-                <th>Running Balance</th>
-                <th>User</th>
-              </tr>
-            </thead>
-            <tbody>
-              {statement?.items.length === 0 ? (
+          <div className="table-wrap">
+            <table className="statement-table">
+              <thead>
                 <tr>
-                  <td colSpan={7} className="state-cell">
-                    No supplier account entries yet.
-                  </td>
+                  <th>Date</th>
+                  <th>Reference</th>
+                  <th>Description</th>
+                  <th>Debit</th>
+                  <th>Credit</th>
+                  <th>Running Balance</th>
+                  <th>User</th>
                 </tr>
-              ) : (
-                statement?.items.map((line) => (
-                  <tr key={line.id}>
-                    <td>{new Date(line.date).toLocaleDateString("en-PK")}</td>
-                    <td>{line.reference}</td>
-                    <td>{line.description}</td>
-                    <td>{line.debitMinor === 0 ? "-" : money(line.debitMinor)}</td>
-                    <td>{line.creditMinor === 0 ? "-" : money(line.creditMinor)}</td>
-                    <td>{money(line.runningBalanceMinor)}</td>
-                    <td>{line.userName}</td>
+              </thead>
+              <tbody>
+                {statement?.items.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="state-cell">
+                      No supplier account entries yet.
+                    </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  statement?.items.map((line) => (
+                    <tr key={line.id}>
+                      <td>{new Date(line.date).toLocaleDateString("en-PK")}</td>
+                      <td>{line.reference}</td>
+                      <td>{line.description}</td>
+                      <td>{line.debitMinor === 0 ? "-" : money(line.debitMinor)}</td>
+                      <td>{line.creditMinor === 0 ? "-" : money(line.creditMinor)}</td>
+                      <td>{money(line.runningBalanceMinor)}</td>
+                      <td>{line.userName}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </section>
       ) : null}
       {tab === "purchases" ? (
@@ -4546,16 +5023,16 @@ const SupplierProfileDrawer = ({
           <div className="activity-list">
             {activity.map((item) => (
               <div className="activity-item" key={item.id}>
-                <strong>{item.action}</strong>
+                <strong>{displayLabel(item.action)}</strong>
                 <span>{new Date(item.occurredAt).toLocaleString("en-PK")}</span>
-                <p>{item.details}</p>
+                <p>{activitySummary(item.details)}</p>
               </div>
             ))}
           </div>
         )
       ) : null}
     </aside>
-  </div>
+  </Dialog>
 );
 
 const supplierPaymentFormFor = (
@@ -4792,7 +5269,7 @@ const PurchaseModule = ({
       <div className="page-heading">
         <div>
           <p className="eyebrow">Procurement</p>
-          <h1>Purchases</h1>
+          <h1>Buy Stock</h1>
         </div>
         <div className="topbar-actions">
           <button
@@ -4815,6 +5292,7 @@ const PurchaseModule = ({
       </div>
       <div className="filters customer-filters">
         <input
+          aria-label="Search purchases"
           placeholder="Search purchase number, supplier, invoice"
           value={query.search ?? ""}
           onChange={(event) => {
@@ -4822,6 +5300,7 @@ const PurchaseModule = ({
           }}
         />
         <select
+          aria-label="Purchase status"
           value={query.status}
           onChange={(event) => {
             setQuery({
@@ -4833,10 +5312,11 @@ const PurchaseModule = ({
         >
           <option value="all">All</option>
           <option value="draft">Draft</option>
-          <option value="received">Posted</option>
+          <option value="received">Received</option>
           <option value="cancelled">Cancelled</option>
         </select>
         <select
+          aria-label="Filter by supplier"
           value={query.supplierId ?? ""}
           onChange={(event) => {
             setQuery(
@@ -4867,12 +5347,8 @@ const PurchaseModule = ({
         <table>
           <thead>
             <tr>
-              <th>Purchase #</th>
-              <th>Invoice</th>
-              <th>Supplier</th>
+              <th>Purchase / supplier</th>
               <th>Date</th>
-              <th>Due</th>
-              <th>Items</th>
               <th>Total</th>
               <th>Payment</th>
               <th>Status</th>
@@ -4882,73 +5358,67 @@ const PurchaseModule = ({
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={10} className="state-cell">
+                <td colSpan={6} className="state-cell">
                   Loading purchases...
                 </td>
               </tr>
             ) : purchases.length === 0 ? (
               <tr>
-                <td colSpan={10} className="state-cell">
-                  No purchases yet. Create a supplier purchase draft.
+                <td colSpan={6} className="state-cell">
+                  {query.search || query.status !== "all" || query.supplierId
+                    ? "No purchases match your filters."
+                    : "No purchases yet. Create a purchase draft to begin."}
                 </td>
               </tr>
             ) : (
               purchases.map((purchase) => (
                 <tr key={purchase.id} onDoubleClick={() => void loadDetail(purchase.id)}>
-                  <td className="strong">{purchase.purchaseNumber}</td>
-                  <td>{purchase.invoiceNumber ?? "-"}</td>
-                  <td>{purchase.supplierName}</td>
-                  <td>{new Date(purchase.purchaseDate).toLocaleDateString("en-PK")}</td>
                   <td>
-                    {purchase.dueDate === null
-                      ? "-"
-                      : new Date(purchase.dueDate).toLocaleDateString("en-PK")}
+                    <button
+                      className="customer-name-link purchase-number-link"
+                      onClick={() => void loadDetail(purchase.id)}
+                    >
+                      {purchase.purchaseNumber}
+                    </button>
+                    <span className="sale-secondary">{purchase.supplierName}</span>
                   </td>
-                  <td>{purchase.itemCount}</td>
+                  <td>{new Date(purchase.purchaseDate).toLocaleDateString("en-PK")}</td>
                   <td>{money(purchase.totalMinor)}</td>
                   <td>
                     <span
                       className={`pill ${purchase.paymentStatus === "paid" ? "success" : "warning"}`}
                     >
-                      {purchase.paymentStatus}
+                      {displayLabel(purchase.paymentStatus)}
                     </span>
                   </td>
                   <td>
                     <span
                       className={`pill ${purchase.status === "received" ? "success" : purchase.status === "cancelled" ? "danger" : "warning"}`}
                     >
-                      {purchase.status === "received" ? "posted" : purchase.status}
+                      {displayLabel(purchase.status)}
                     </span>
                   </td>
                   <td>
                     <div className="row-actions">
                       <button onClick={() => void loadDetail(purchase.id)}>View</button>
-                      <button
-                        disabled={!canEdit || purchase.status !== "draft"}
-                        onClick={() => void editPurchase(purchase.id)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        disabled={!canReceive || purchase.status !== "draft"}
-                        onClick={() => void receivePurchase(purchase)}
-                      >
-                        Receive
-                      </button>
-                      <button
-                        disabled={!canCancel || purchase.status !== "draft"}
-                        onClick={() => {
-                          setCancelTarget(purchase);
-                        }}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        disabled={!canReturn || purchase.status !== "received"}
-                        onClick={() => void openReturn(purchase.id)}
-                      >
-                        Return
-                      </button>
+                      {canEdit && purchase.status === "draft" ? (
+                        <button onClick={() => void editPurchase(purchase.id)}>Edit</button>
+                      ) : null}
+                      {canReceive && purchase.status === "draft" ? (
+                        <button onClick={() => void receivePurchase(purchase)}>Receive</button>
+                      ) : null}
+                      {canCancel && purchase.status === "draft" ? (
+                        <button
+                          onClick={() => {
+                            setCancelTarget(purchase);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      ) : null}
+                      {canReturn && purchase.status === "received" ? (
+                        <button onClick={() => void openReturn(purchase.id)}>Return</button>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -5067,7 +5537,7 @@ const PurchaseForm = ({
     });
   };
   return (
-    <div className="modal-backdrop">
+    <Dialog label={form.id === undefined ? "New purchase" : "Edit purchase"} onClose={onClose}>
       <section className="modal purchase-modal">
         <header>
           <div>
@@ -5076,6 +5546,10 @@ const PurchaseForm = ({
           </div>
           <button onClick={onClose}>Close</button>
         </header>
+        <p className="purchase-help">
+          Save a draft first. Receive it when the goods arrive to add stock and update the supplier
+          account.
+        </p>
         <div className="form-grid">
           <label
             className={
@@ -5164,66 +5638,88 @@ const PurchaseForm = ({
           )}
           {form.items.map((item, index) => (
             <div className="purchase-line" key={`${String(index)}-${item.productId}`}>
-              <select
-                value={item.productId}
-                onChange={(event) => {
-                  const product = products.find((entry) => entry.id === event.target.value);
-                  updateItem(index, {
-                    productId: event.target.value,
-                    unitId: product?.unitId ?? item.unitId,
-                    unitCost:
-                      product === undefined ? item.unitCost : fromMinor(product.purchasePriceMinor)
-                  });
-                }}
-              >
-                <option value="">Product</option>
-                {products.map((product) => (
-                  <option value={product.id} key={product.id}>
-                    {product.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={item.unitId}
-                onChange={(event) => {
-                  updateItem(index, { unitId: event.target.value });
-                }}
-              >
-                <option value="">Unit</option>
-                {catalog?.units.map((unit) => (
-                  <option value={unit.id} key={unit.id}>
-                    {unit.name}
-                  </option>
-                ))}
-              </select>
-              <input
-                placeholder="Qty"
-                value={item.quantity}
-                onChange={(event) => {
-                  updateItem(index, { quantity: event.target.value });
-                }}
-              />
-              <input
-                placeholder="Cost"
-                value={item.unitCost}
-                onChange={(event) => {
-                  updateItem(index, { unitCost: event.target.value });
-                }}
-              />
-              <input
-                placeholder="Discount"
-                value={item.discount}
-                onChange={(event) => {
-                  updateItem(index, { discount: event.target.value });
-                }}
-              />
-              <input
-                placeholder="Tax"
-                value={item.tax}
-                onChange={(event) => {
-                  updateItem(index, { tax: event.target.value });
-                }}
-              />
+              <label>
+                Item
+                <select
+                  aria-label="Item"
+                  value={item.productId}
+                  onChange={(event) => {
+                    const product = products.find((entry) => entry.id === event.target.value);
+                    updateItem(index, {
+                      productId: event.target.value,
+                      unitId: product?.unitId ?? item.unitId,
+                      unitCost:
+                        product === undefined
+                          ? item.unitCost
+                          : fromMinor(product.purchasePriceMinor)
+                    });
+                  }}
+                >
+                  <option value="">Product</option>
+                  {products.map((product) => (
+                    <option value={product.id} key={product.id}>
+                      {product.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Unit
+                <select
+                  aria-label="Unit"
+                  value={item.unitId}
+                  onChange={(event) => {
+                    updateItem(index, { unitId: event.target.value });
+                  }}
+                >
+                  <option value="">Unit</option>
+                  {catalog?.units.map((unit) => (
+                    <option value={unit.id} key={unit.id}>
+                      {unit.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Quantity
+                <input
+                  placeholder="Qty"
+                  value={item.quantity}
+                  onChange={(event) => {
+                    updateItem(index, { quantity: event.target.value });
+                  }}
+                />
+              </label>
+              <label>
+                Unit cost
+                <input
+                  placeholder="Cost"
+                  value={item.unitCost}
+                  onChange={(event) => {
+                    updateItem(index, { unitCost: event.target.value });
+                  }}
+                />
+              </label>
+              <label>
+                Line discount
+                <input
+                  placeholder="Discount"
+                  value={item.discount}
+                  onChange={(event) => {
+                    updateItem(index, { discount: event.target.value });
+                  }}
+                />
+              </label>
+              <label>
+                Line tax
+                <input
+                  placeholder="Tax"
+                  value={item.tax}
+                  onChange={(event) => {
+                    updateItem(index, { tax: event.target.value });
+                  }}
+                />
+              </label>
               <button
                 onClick={() => {
                   onChange({
@@ -5305,7 +5801,7 @@ const PurchaseForm = ({
           </button>
         </footer>
       </section>
-    </div>
+    </Dialog>
   );
 };
 
@@ -5316,7 +5812,11 @@ const PurchaseDetailsDrawer = ({
   readonly purchase: PurchaseDetailDto;
   readonly onClose: () => void;
 }) => (
-  <div className="drawer-backdrop">
+  <Dialog
+    label={`Purchase details ${purchase.purchaseNumber}`}
+    onClose={onClose}
+    className="drawer-backdrop"
+  >
     <aside className="drawer customer-profile">
       <header>
         <div>
@@ -5328,11 +5828,8 @@ const PurchaseDetailsDrawer = ({
       </header>
       <div className="profile-stats">
         <Metric label="Grand Total" value={money(purchase.totalMinor)} />
-        <Metric label="Payment" value={purchase.paymentStatus} />
-        <Metric
-          label="Status"
-          value={purchase.status === "received" ? "posted" : purchase.status}
-        />
+        <Metric label="Payment" value={displayLabel(purchase.paymentStatus)} />
+        <Metric label="Status" value={displayLabel(purchase.status)} />
       </div>
       <section className="detail-section">
         <Detail label="Invoice" value={purchase.invoiceNumber ?? "-"} />
@@ -5353,34 +5850,36 @@ const PurchaseDetailsDrawer = ({
         <Detail label="Other Charges" value={money(purchase.otherChargesMinor)} />
         <Detail label="Notes" value={purchase.notes ?? "-"} />
       </section>
-      <table className="statement-table">
-        <thead>
-          <tr>
-            <th>Product</th>
-            <th>Unit</th>
-            <th>Qty</th>
-            <th>Cost</th>
-            <th>Discount</th>
-            <th>Tax</th>
-            <th>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {purchase.items.map((item) => (
-            <tr key={item.id}>
-              <td>{item.productName}</td>
-              <td>{item.unitName}</td>
-              <td>{item.quantity}</td>
-              <td>{money(item.unitCostMinor)}</td>
-              <td>{money(item.discountMinor)}</td>
-              <td>{money(item.taxMinor)}</td>
-              <td>{money(item.lineTotalMinor)}</td>
+      <div className="table-wrap">
+        <table className="statement-table">
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Unit</th>
+              <th>Qty</th>
+              <th>Cost</th>
+              <th>Discount</th>
+              <th>Tax</th>
+              <th>Total</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {purchase.items.map((item) => (
+              <tr key={item.id}>
+                <td>{item.productName}</td>
+                <td>{item.unitName}</td>
+                <td>{item.quantity}</td>
+                <td>{money(item.unitCostMinor)}</td>
+                <td>{money(item.discountMinor)}</td>
+                <td>{money(item.taxMinor)}</td>
+                <td>{money(item.lineTotalMinor)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </aside>
-  </div>
+  </Dialog>
 );
 
 const PurchaseReturnDialog = ({
@@ -5400,13 +5899,17 @@ const PurchaseReturnDialog = ({
       quantity: Number(form.quantities[item.id] ?? "0")
     }))
     .filter((entry) => entry.quantity > 0);
-  const totalMinor = selectedItems.reduce(
-    (total, entry) => total + entry.quantity * entry.item.unitCostMinor,
-    0
+  const { totalMinor, valid } = returnPreview(
+    {
+      ...form.purchase,
+      totalMinor:
+        form.purchase.totalMinor - form.purchase.freightMinor - form.purchase.otherChargesMinor
+    },
+    form.quantities
   );
-  const canSubmit = form.reason.trim().length >= 3 && totalMinor > 0;
+  const canSubmit = valid && form.reason.trim().length >= 3;
   return (
-    <div className="modal-backdrop">
+    <Dialog label={`Return purchase ${form.purchase.purchaseNumber}`} onClose={onClose}>
       <section className="modal return-modal">
         <header>
           <div>
@@ -5420,6 +5923,9 @@ const PurchaseReturnDialog = ({
           <Metric label="Supplier Credit" value={money(totalMinor)} />
           <Metric label="Items" value={String(selectedItems.length)} />
         </div>
+        <p className="purchase-help">
+          Credit includes item discounts and tax. Freight and other charges are not credited.
+        </p>
         <div className="return-lines">
           {form.purchase.items.map((item) => {
             const available = item.quantity - item.returnedQuantity;
@@ -5433,7 +5939,9 @@ const PurchaseReturnDialog = ({
                   </span>
                 </div>
                 <input
+                  aria-label={`Return quantity for ${item.productName}`}
                   type="number"
+                  step="any"
                   min={0}
                   max={available}
                   value={form.quantities[item.id] ?? "0"}
@@ -5467,7 +5975,7 @@ const PurchaseReturnDialog = ({
           </button>
         </footer>
       </section>
-    </div>
+    </Dialog>
   );
 };
 
@@ -5505,34 +6013,72 @@ const ReportsModule = ({
 }: {
   readonly showToast: (message: string, tone?: ToastState["tone"]) => void;
 }) => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date().toLocaleDateString("en-CA");
   const [dateFrom, setDateFrom] = useState(today);
   const [dateTo, setDateTo] = useState(today);
   const [activeTab, setActiveTab] = useState<ReportTab>("sales");
   const [report, setReport] = useState<ReportsSummaryDto | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const loadReport = useCallback(async () => {
-    setLoading(true);
-    const response = await window.orix.reports.summary({ dateFrom, dateTo });
-    if (response.ok) {
-      setReport(response.value);
-    } else {
-      showToast(response.error.message, "error");
-    }
-    setLoading(false);
-  }, [dateFrom, dateTo, showToast]);
+  const [appliedDates, setAppliedDates] = useState({ dateFrom: today, dateTo: today });
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const tabsId = useId();
+  const datesChanged = dateFrom !== appliedDates.dateFrom || dateTo !== appliedDates.dateTo;
 
   useEffect(() => {
-    void loadReport();
-  }, [loadReport]);
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    void window.orix.reports
+      .summary(appliedDates)
+      .then((response) => {
+        if (cancelled) return;
+        if (response.ok) setReport(response.value);
+        else {
+          setReport(null);
+          setError(response.error.message);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setReport(null);
+          setError("Unable to load reports. Please try again.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [appliedDates, refreshKey]);
+
+  const applyDates = () => {
+    if (!dateFrom || !dateTo) {
+      setError("Choose a start and end date.");
+      return;
+    }
+    if (dateFrom > dateTo) {
+      setError("End date must be on or after start date.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setAppliedDates({ dateFrom, dateTo });
+  };
 
   const exportActiveReport = () => {
-    if (report === null) {
+    if (report === null || loading || error !== null) {
       showToast("Load a report before exporting.", "error");
       return;
     }
-    downloadCsv(`orix-${activeTab}-${dateFrom}-to-${dateTo}.csv`, reportCsvRows(report, activeTab));
+    downloadCsv(
+      activeTab === "sales"
+        ? `orix-sales-${report.dateFrom}-to-${report.dateTo}.csv`
+        : `orix-${activeTab}-${report.generatedAt.slice(0, 10)}.csv`,
+      reportCsvRows(report, activeTab)
+    );
     showToast("Report exported.");
   };
 
@@ -5553,15 +6099,25 @@ const ReportsModule = ({
           <h1>Reports</h1>
         </div>
         <div className="toolbar-actions">
-          <button onClick={() => void loadReport()}>
+          <button
+            disabled={loading}
+            onClick={() => {
+              setLoading(true);
+              setRefreshKey((key) => key + 1);
+            }}
+          >
             <Icon name="refresh" />
             Refresh
           </button>
-          <button onClick={exportActiveReport}>
+          <button
+            disabled={loading || report === null || error !== null}
+            onClick={exportActiveReport}
+          >
             <Icon name="upload" />
-            CSV
+            Export CSV
           </button>
           <button
+            disabled={loading || report === null || error !== null}
             onClick={() => {
               window.print();
             }}
@@ -5571,7 +6127,14 @@ const ReportsModule = ({
           </button>
         </div>
       </div>
-      <div className="report-filters card">
+      <form
+        className="report-filters card"
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          applyDates();
+        }}
+      >
         <label>
           From
           <input
@@ -5592,34 +6155,69 @@ const ReportsModule = ({
             }}
           />
         </label>
-        <button className="primary" onClick={() => void loadReport()}>
-          Run Reports
+        <button className="primary" type="submit" disabled={loading}>
+          {loading ? "Loading…" : "Run Reports"}
         </button>
-      </div>
+      </form>
+      <p className="report-scope">
+        Dates filter sales and posted returns. Net sales deducts returns posted in the period,
+        including returns of older invoices. Invoice rows show cumulative returns; other reports
+        show current balances.
+      </p>
+      {datesChanged ? <p role="status">Date changes have not been applied.</p> : null}
+      {error !== null ? <p role="alert">{error}</p> : null}
       {loading ? (
         <LoadingState label="Loading reports" />
       ) : report === null ? (
         <EmptyState title="Reports unavailable" description="Refresh to load report data." />
       ) : (
         <>
+          <p className="report-scope">
+            Sales period: {report.dateFrom} to {report.dateTo}. Updated{" "}
+            {new Date(report.generatedAt).toLocaleString()}.
+          </p>
           <div className="report-summary-grid">
-            <Metric label="Sales" value={money(report.totals.salesMinor)} />
+            <Metric label="Gross sales in period" value={money(report.totals.grossSalesMinor)} />
+            <Metric label="Returns posted in period" value={money(report.totals.returnsMinor)} />
+            <Metric label="Net sales in period" value={money(report.totals.salesMinor)} />
             <Metric label="Cash Expected" value={money(report.totals.cashExpectedMinor)} />
             <Metric
-              label="Inventory Cost"
+              label="Stock value (cost)"
               value={money(report.totals.inventoryPurchaseValueMinor)}
             />
             <Metric
-              label="Inventory Retail"
+              label="Stock value (selling price)"
               value={money(report.totals.inventoryRetailValueMinor)}
             />
-            <Metric label="Receivables" value={money(report.totals.receivablesMinor)} />
-            <Metric label="Payables" value={money(report.totals.payablesMinor)} />
+            <Metric label="Customers owe" value={money(report.totals.receivablesMinor)} />
+            <Metric label="Owed to suppliers" value={money(report.totals.payablesMinor)} />
           </div>
           <div className="report-tabs" role="tablist" aria-label="Reports">
-            {tabs.map((tab) => (
+            {tabs.map((tab, index) => (
               <button
                 key={tab.id}
+                role="tab"
+                id={`${tabsId}-${tab.id}`}
+                aria-selected={activeTab === tab.id}
+                aria-controls={`${tabsId}-panel`}
+                tabIndex={activeTab === tab.id ? 0 : -1}
+                onKeyDown={(event) => {
+                  const next =
+                    event.key === "ArrowRight"
+                      ? (index + 1) % tabs.length
+                      : event.key === "ArrowLeft"
+                        ? (index + tabs.length - 1) % tabs.length
+                        : event.key === "Home"
+                          ? 0
+                          : event.key === "End"
+                            ? tabs.length - 1
+                            : -1;
+                  const target = tabs[next];
+                  if (target === undefined) return;
+                  event.preventDefault();
+                  setActiveTab(target.id);
+                  document.getElementById(`${tabsId}-${target.id}`)?.focus();
+                }}
                 className={activeTab === tab.id ? "active" : ""}
                 onClick={() => {
                   setActiveTab(tab.id);
@@ -5629,7 +6227,14 @@ const ReportsModule = ({
               </button>
             ))}
           </div>
-          <ReportPanel report={report} activeTab={activeTab} />
+          <div
+            role="tabpanel"
+            id={`${tabsId}-panel`}
+            aria-labelledby={`${tabsId}-${activeTab}`}
+            tabIndex={0}
+          >
+            <ReportPanel report={report} activeTab={activeTab} />
+          </div>
         </>
       )}
     </section>
@@ -5649,9 +6254,10 @@ const ReportPanel = ({
         <div className="report-title">
           <div>
             <p className="eyebrow">Cash Drawer</p>
-            <h2>Cash movement</h2>
+            <h2>Current counter session</h2>
+            <p>Live drawer reconciliation; independent of the sales date filter.</p>
           </div>
-          <span className="pill">{report.cashDrawer.sessionStatus}</span>
+          <span className="pill">{displayLabel(report.cashDrawer.sessionStatus)}</span>
         </div>
         <div className="cash-report-grid">
           <Metric label="Opening Cash" value={money(report.cashDrawer.openingCashMinor)} />
@@ -5750,7 +6356,9 @@ const ReportPanel = ({
         "Items",
         "Subtotal",
         "Discount",
-        "Total",
+        "Original total",
+        "Returned to date",
+        "Net invoice",
         "Paid",
         "Cashier"
       ]}
@@ -5762,6 +6370,8 @@ const ReportPanel = ({
         money(sale.subtotalMinor),
         money(sale.discountMinor),
         money(sale.totalMinor),
+        money(sale.refundedMinor),
+        money(sale.netTotalMinor),
         money(sale.paidMinor),
         sale.cashierName
       ])}
@@ -5789,7 +6399,9 @@ const ReportTable = ({
       <span className="pill">{rows.length} rows</span>
     </div>
     {rows.length === 0 ? (
-      <EmptyState title={title} description={empty} />
+      <p className="report-empty" role="status">
+        {empty}
+      </p>
     ) : (
       <div className="table-wrap report-table-wrap">
         <table>
@@ -5887,7 +6499,9 @@ const reportCsvRows = (
       "Subtotal",
       "Discount",
       "Tax",
-      "Total",
+      "Original total",
+      "Returned to date",
+      "Net invoice",
       "Paid",
       "Cashier"
     ],
@@ -5900,6 +6514,8 @@ const reportCsvRows = (
       fromMinor(sale.discountMinor),
       fromMinor(sale.taxMinor),
       fromMinor(sale.totalMinor),
+      fromMinor(sale.refundedMinor),
+      fromMinor(sale.netTotalMinor),
       fromMinor(sale.paidMinor),
       sale.cashierName
     ])
@@ -6361,7 +6977,7 @@ const ProductModule = ({
                         <span
                           className={`pill ${product.archivedAt !== null ? "muted" : product.status}`}
                         >
-                          {product.archivedAt !== null ? "archived" : product.status}
+                          {displayLabel(product.archivedAt !== null ? "archived" : product.status)}
                         </span>
                       </td>
                       <td>{product.categoryName ?? "-"}</td>
@@ -6455,6 +7071,33 @@ const inventoryColumns: readonly InventoryColumn[] = [
   "actions"
 ];
 
+const defaultInventoryColumns: readonly InventoryColumn[] = [
+  "barcode",
+  "product",
+  "category",
+  "currentStock",
+  "minimumStock",
+  "retailPrice",
+  "status",
+  "actions"
+];
+
+const inventoryColumnLabels: Record<InventoryColumn, string> = {
+  barcode: "Barcode",
+  sku: "SKU",
+  product: "Item",
+  category: "Category",
+  currentStock: "Current stock",
+  availableStock: "Available stock",
+  minimumStock: "Minimum stock",
+  maximumStock: "Maximum stock",
+  purchasePrice: "Cost price",
+  retailPrice: "Selling price",
+  inventoryValue: "Stock value (cost)",
+  status: "Status",
+  actions: "Actions"
+};
+
 const InventoryModule = ({
   showToast
 }: {
@@ -6483,7 +7126,7 @@ const InventoryModule = ({
     "stock"
   );
   const [visibleColumns, setVisibleColumns] =
-    useState<readonly InventoryColumn[]>(inventoryColumns);
+    useState<readonly InventoryColumn[]>(defaultInventoryColumns);
   const [drawerItem, setDrawerItem] = useState<InventoryItemDto | null>(null);
   const [adjustment, setAdjustment] = useState<StockAdjustmentForm | null>(null);
   const [openingStock, setOpeningStock] = useState<readonly OpeningStockForm[]>([]);
@@ -6786,14 +7429,13 @@ const InventoryModule = ({
         <Metric label="Low Stock" value={String(overview?.lowStock ?? 0)} />
         <Metric label="Out Of Stock" value={String(overview?.outOfStock ?? 0)} />
         <Metric
-          label="Inventory Value (Purchase)"
+          label="Stock value (cost)"
           value={money(overview?.inventoryValuePurchaseMinor ?? 0)}
         />
         <Metric
-          label="Inventory Value (Retail)"
+          label="Stock value (selling price)"
           value={money(overview?.inventoryValueRetailMinor ?? 0)}
         />
-        <Metric label="Total Quantity" value={String(overview?.totalInventoryQuantity ?? 0)} />
       </div>
 
       <div className="inventory-tabs">
@@ -6841,6 +7483,7 @@ const InventoryModule = ({
         <article className="product-area">
           <div className="filters inventory-filters">
             <input
+              aria-label="Search inventory"
               placeholder="Search barcode, SKU, item, category"
               value={query.search ?? ""}
               onChange={(event) => {
@@ -6848,6 +7491,7 @@ const InventoryModule = ({
               }}
             />
             <select
+              aria-label="Stock status"
               value={query.status ?? "all"}
               onChange={(event) => {
                 setQuery({
@@ -6898,7 +7542,7 @@ const InventoryModule = ({
                   ) : null}
                   {visible("currentStock") ? (
                     <SortableTh
-                      label="Current"
+                      label="Current stock"
                       sortBy="currentStock"
                       query={query}
                       onQuery={setQuery}
@@ -6907,7 +7551,7 @@ const InventoryModule = ({
                   {visible("availableStock") ? <th>Available</th> : null}
                   {visible("minimumStock") ? (
                     <SortableTh
-                      label="Minimum"
+                      label="Minimum stock"
                       sortBy="minimumStock"
                       query={query}
                       onQuery={setQuery}
@@ -6916,7 +7560,7 @@ const InventoryModule = ({
                   {visible("maximumStock") ? <th>Maximum</th> : null}
                   {visible("purchasePrice") ? (
                     <SortableTh
-                      label="Purchase"
+                      label="Cost price"
                       sortBy="purchasePrice"
                       query={query}
                       onQuery={setQuery}
@@ -6924,7 +7568,7 @@ const InventoryModule = ({
                   ) : null}
                   {visible("retailPrice") ? (
                     <SortableTh
-                      label="Retail"
+                      label="Selling price"
                       sortBy="retailPrice"
                       query={query}
                       onQuery={setQuery}
@@ -6932,7 +7576,7 @@ const InventoryModule = ({
                   ) : null}
                   {visible("inventoryValue") ? (
                     <SortableTh
-                      label="Value"
+                      label="Stock value"
                       sortBy="inventoryValue"
                       query={query}
                       onQuery={setQuery}
@@ -6947,13 +7591,13 @@ const InventoryModule = ({
               <tbody>
                 {loading ? (
                   <tr>
-                    <td className="state-cell" colSpan={inventoryColumns.length}>
+                    <td className="state-cell" colSpan={visibleColumns.length}>
                       Loading inventory...
                     </td>
                   </tr>
                 ) : items.length === 0 ? (
                   <tr>
-                    <td className="state-cell" colSpan={inventoryColumns.length}>
+                    <td className="state-cell" colSpan={visibleColumns.length}>
                       No inventory records found.
                     </td>
                   </tr>
@@ -6967,7 +7611,19 @@ const InventoryModule = ({
                     >
                       {visible("barcode") ? <td>{item.barcode ?? "-"}</td> : null}
                       {visible("sku") ? <td>{item.sku ?? "-"}</td> : null}
-                      {visible("product") ? <td className="strong">{item.productName}</td> : null}
+                      {visible("product") ? (
+                        <td>
+                          <button
+                            className="inventory-item-link"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setDrawerItem(item);
+                            }}
+                          >
+                            {item.productName}
+                          </button>
+                        </td>
+                      ) : null}
                       {visible("category") ? <td>{item.categoryName ?? "-"}</td> : null}
                       {visible("currentStock") ? <td>{item.currentStock}</td> : null}
                       {visible("availableStock") ? <td>{item.availableStock}</td> : null}
@@ -6980,7 +7636,7 @@ const InventoryModule = ({
                       ) : null}
                       {visible("status") ? (
                         <td>
-                          <span className={`pill ${item.status}`}>{item.status}</span>
+                          <span className={`pill ${item.status}`}>{displayLabel(item.status)}</span>
                         </td>
                       ) : null}
                       {visible("actions") ? (
@@ -7072,10 +7728,11 @@ const ColumnPicker = ({
   readonly onChange: (columns: readonly InventoryColumn[]) => void;
 }) => (
   <select
+    aria-label="Visible inventory columns"
     value=""
     onChange={(event) => {
       const column = event.target.value as InventoryColumn;
-      if (event.target.value === "") return;
+      if (event.target.value === "" || column === "product" || column === "actions") return;
       onChange(
         visibleColumns.includes(column)
           ? visibleColumns.filter((item) => item !== column)
@@ -7085,8 +7742,8 @@ const ColumnPicker = ({
   >
     <option value="">Columns</option>
     {inventoryColumns.map((column) => (
-      <option key={column} value={column}>
-        {visibleColumns.includes(column) ? "Hide" : "Show"} {column}
+      <option key={column} value={column} disabled={column === "product" || column === "actions"}>
+        {visibleColumns.includes(column) ? "Hide" : "Show"} {inventoryColumnLabels[column]}
       </option>
     ))}
   </select>
@@ -7203,7 +7860,8 @@ const StockTakePanel = ({
               >
                 <span>{count.countNumber}</span>
                 <small>
-                  {count.status} · {count.itemCount} items · {count.varianceCount} variances
+                  {displayLabel(count.status)} · {count.itemCount} items · {count.varianceCount}{" "}
+                  variances
                 </small>
               </button>
             ))
@@ -7374,7 +8032,7 @@ const MovementHistory = ({
               <tr key={movement.id}>
                 <td>{new Date(movement.date).toLocaleString("en-PK")}</td>
                 <td className="strong">{movement.productName}</td>
-                <td>{movement.reason}</td>
+                <td>{displayLabel(movement.reason)}</td>
                 <td>
                   {movement.direction === "in" ? "+" : "-"}
                   {movement.quantity}
@@ -7458,8 +8116,8 @@ const OpeningStockDialogContent = ({
         </header>
         <div className="opening-stock-body">
           <p className="muted-text">
-            Step 1: enter or import products. Step 2: review. Step 3: confirm immutable
-            transactions.
+            Add or import your items, review their opening quantities, then confirm. Corrections
+            afterward must be recorded as stock adjustments.
           </p>
           {errors.rows === undefined ? null : <small className="field-error">{errors.rows}</small>}
           {rows.map((row, index) => (
@@ -7915,7 +8573,7 @@ const DashboardPage = ({
   }
 
   const metrics = [
-    ["Sales Today", money(dashboard?.todaySalesMinor ?? 0), "Completed sales"],
+    ["Net Sales Today", money(dashboard?.todaySalesMinor ?? 0), "Sales less returns posted today"],
     ["Cash Drawer", money(dashboard?.cashInDrawerMinor ?? 0), "Expected cash"],
     ["Customer Dues", money(dashboard?.outstandingCustomersMinor ?? 0), "Money to collect"],
     ["Low Stock", String(dashboard?.lowStockCount ?? 0), "Items to check"]
@@ -8064,117 +8722,264 @@ const SettingsPage = ({
       backupLocation: ""
     }
   );
+  const [activeTab, setActiveTab] = useState("store");
+  const tabsId = useId();
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const root = useRef<HTMLElement>(null);
+  const previousSettings = useRef(settings);
+  const savedTheme = useRef(settings?.theme ?? "system");
+  savedTheme.current = settings?.theme ?? "system";
+  useEffect(
+    () => () => {
+      onThemePreview(savedTheme.current);
+    },
+    [onThemePreview]
+  );
   const [submitted, setSubmitted] = useState(false);
   const errors = submitted ? settingsErrors(draft) : {};
 
   useEffect(() => {
-    if (settings !== null) {
-      setDraft(settings);
-    }
+    if (settings === null) return;
+    const previous = previousSettings.current;
+    setDraft((current) => ({
+      ...settings,
+      ...Object.fromEntries(
+        (["theme", "storeDisplayName", "receiptHeader", "receiptFooter"] as const)
+          .filter((key) => previous !== null && current[key] !== previous[key])
+          .map((key) => [key, current[key]])
+      )
+    }));
+    previousSettings.current = settings;
   }, [settings]);
-
+  const dirty =
+    settings !== null &&
+    (["theme", "storeDisplayName", "receiptHeader", "receiptFooter"] as const).some(
+      (key) => draft[key] !== settings[key]
+    );
   const saveSettings = async () => {
+    if (saving) return;
     setSubmitted(true);
+    setFeedback("");
     const validationError = validateSettingsDraft(draft);
     if (validationError !== null) {
-      showToast(validationError, "error");
+      setFeedback(validationError);
+      const invalid = settingsErrors(draft);
+      setActiveTab(invalid.storeDisplayName ? "store" : "receipts");
+      requestAnimationFrame(() =>
+        root.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()
+      );
       return;
     }
-    const response = await window.orix.settings.save(draft);
-    if (response.ok) {
-      onSaved(response.value);
-    } else {
-      showToast(response.error.message, "error");
+    setSaving(true);
+    try {
+      const response = await window.orix.settings.save(draft);
+      if (response.ok) {
+        onSaved(response.value);
+        setFeedback("Settings saved.");
+      } else setFeedback(response.error.message);
+    } catch {
+      setFeedback("Settings could not be saved. Please try again.");
+    } finally {
+      setSaving(false);
     }
   };
-
-  const changeTheme = async (theme: AppSettingsDto["theme"]) => {
-    const nextDraft = { ...draft, theme };
-    setDraft(nextDraft);
-    onThemePreview(theme);
-    const response = await window.orix.settings.save(nextDraft);
-    if (response.ok) {
-      onSaved(response.value);
-    } else {
-      showToast(response.error.message, "error");
-    }
-  };
-
+  const tabs = [
+    { id: "store", label: "Store & appearance" },
+    { id: "receipts", label: "Receipts" },
+    { id: "data", label: "Data & backup" },
+    { id: "users", label: "Users" },
+    ...(canManageMigration ? [{ id: "support", label: "Support" }] : [])
+  ];
+  const editable = activeTab === "store" || activeTab === "receipts";
   return (
-    <section className="page-stack">
-      <div className="page-heading">
+    <section className="page-stack settings-page" ref={root}>
+      <div className="page-heading settings-heading">
         <div>
           <p className="eyebrow">Application</p>
           <h1>Settings</h1>
         </div>
-        <button className="primary" onClick={() => void saveSettings()}>
-          Save Settings
-        </button>
+        <div className="toolbar-actions">
+          <span role="status">{saving ? "Saving…" : dirty ? "Unsaved changes" : "Up to date"}</span>
+          {editable ? (
+            <>
+              <button
+                disabled={saving || !dirty}
+                onClick={() => {
+                  if (settings) {
+                    setDraft(settings);
+                    onThemePreview(settings.theme);
+                    setFeedback("");
+                    setSubmitted(false);
+                  }
+                }}
+              >
+                Discard changes
+              </button>
+              <button className="primary" disabled={saving} onClick={() => void saveSettings()}>
+                {saving ? "Saving…" : "Save Settings"}
+              </button>
+            </>
+          ) : null}
+        </div>
       </div>
-      <div className="settings-grid">
-        <SettingsPanel title="General">
-          <label>
-            Theme
-            <select
-              value={draft.theme}
-              onChange={(event) => {
-                void changeTheme(event.target.value as AppSettingsDto["theme"]);
+      {feedback ? (
+        <p role="status" className="settings-feedback">
+          {feedback}
+        </p>
+      ) : null}
+      <div className="settings-tabs" role="tablist" aria-label="Settings sections">
+        {tabs.map((tab, index) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            id={`${tabsId}-${tab.id}-tab`}
+            aria-controls={`${tabsId}-${tab.id}-panel`}
+            aria-selected={activeTab === tab.id}
+            tabIndex={activeTab === tab.id ? 0 : -1}
+            onClick={() => {
+              setActiveTab(tab.id);
+            }}
+            onKeyDown={(event) => {
+              let target = index;
+              if (event.key === "ArrowRight") target = (index + 1) % tabs.length;
+              else if (event.key === "ArrowLeft") target = (index - 1 + tabs.length) % tabs.length;
+              else if (event.key === "Home") target = 0;
+              else if (event.key === "End") target = tabs.length - 1;
+              else return;
+              event.preventDefault();
+              const next = tabs[target];
+              if (next) {
+                setActiveTab(next.id);
+                document.getElementById(`${tabsId}-${next.id}-tab`)?.focus();
+              }
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      <p className="muted-text">
+        {editable
+          ? "Changes stay in your draft when switching tabs. Save applies to appearance, store name and receipt text."
+          : "Actions in this tab take effect separately. Your unsaved settings stay in their tabs."}
+      </p>
+      <div className="settings-tab-panels">
+        <div
+          className="settings-grid settings-tab-panel"
+          role="tabpanel"
+          id={`${tabsId}-store-panel`}
+          aria-labelledby={`${tabsId}-store-tab`}
+          hidden={activeTab !== "store"}
+        >
+          <SettingsPanel title="General">
+            <label>
+              Theme
+              <select
+                aria-label="Theme"
+                value={draft.theme}
+                onChange={(event) => {
+                  const theme = event.target.value as AppSettingsDto["theme"];
+                  setDraft({ ...draft, theme });
+                  onThemePreview(theme);
+                }}
+              >
+                <option value="system">System</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </label>
+          </SettingsPanel>
+          <SettingsPanel title="Store Information">
+            <Field
+              label="Store display name *"
+              value={draft.storeDisplayName}
+              error={errors.storeDisplayName}
+              required
+              onChange={(storeDisplayName) => {
+                setDraft({ ...draft, storeDisplayName });
               }}
-            >
-              <option value="system">System</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-            </select>
-          </label>
-        </SettingsPanel>
-        <SettingsPanel title="Store Information">
-          <Field
-            label="Store display name *"
-            value={draft.storeDisplayName}
-            error={errors.storeDisplayName}
-            required
-            onChange={(storeDisplayName) => {
-              setDraft({ ...draft, storeDisplayName });
-            }}
-          />
-        </SettingsPanel>
-        <SettingsPanel title="Receipt">
-          <Field
-            label="Header *"
-            value={draft.receiptHeader}
-            error={errors.receiptHeader}
-            required
-            onChange={(receiptHeader) => {
-              setDraft({ ...draft, receiptHeader });
-            }}
-          />
-          <Field
-            label="Footer *"
-            value={draft.receiptFooter}
-            error={errors.receiptFooter}
-            required
-            onChange={(receiptFooter) => {
-              setDraft({ ...draft, receiptFooter });
-            }}
-          />
-        </SettingsPanel>
-        <SettingsPanel title="Database">
-          <LegacyStockImportTool canManage={canManageMigration} showToast={showToast} />
-        </SettingsPanel>
-        <SettingsPanel title="Backup">
-          <BackupTool
-            canManage={canManageMigration}
-            settings={draft}
-            onSettingsSaved={(savedSettings) => {
-              setDraft(savedSettings);
-              onSaved(savedSettings);
-            }}
-            showToast={showToast}
-          />
-        </SettingsPanel>
-        <SettingsPanel title="Users">
-          <UserManagement canManage={canManageUsers} showToast={showToast} />
-        </SettingsPanel>
+            />
+          </SettingsPanel>
+        </div>
+        <div
+          className="settings-grid settings-tab-panel"
+          role="tabpanel"
+          id={`${tabsId}-receipts-panel`}
+          aria-labelledby={`${tabsId}-receipts-tab`}
+          hidden={activeTab !== "receipts"}
+        >
+          <SettingsPanel title="Receipt">
+            <Field
+              label="Header *"
+              value={draft.receiptHeader}
+              error={errors.receiptHeader}
+              required
+              onChange={(receiptHeader) => {
+                setDraft({ ...draft, receiptHeader });
+              }}
+            />
+            <Field
+              label="Footer *"
+              value={draft.receiptFooter}
+              error={errors.receiptFooter}
+              required
+              onChange={(receiptFooter) => {
+                setDraft({ ...draft, receiptFooter });
+              }}
+            />
+          </SettingsPanel>
+        </div>
+        <div
+          className="settings-grid settings-tab-panel"
+          role="tabpanel"
+          id={`${tabsId}-data-panel`}
+          aria-labelledby={`${tabsId}-data-tab`}
+          hidden={activeTab !== "data"}
+        >
+          <SettingsPanel title="Database">
+            <LegacyStockImportTool canManage={canManageMigration} showToast={showToast} />
+          </SettingsPanel>
+          <SettingsPanel title="Backup">
+            <BackupTool
+              canManage={canManageMigration}
+              settings={draft}
+              onSettingsSaved={(savedSettings) => {
+                setDraft((current) => ({
+                  ...current,
+                  backupLocation: savedSettings.backupLocation
+                }));
+                onSaved(savedSettings);
+              }}
+              showToast={showToast}
+            />
+          </SettingsPanel>
+        </div>
+        {canManageMigration ? (
+          <div
+            className="settings-grid settings-tab-panel"
+            role="tabpanel"
+            id={`${tabsId}-support-panel`}
+            aria-labelledby={`${tabsId}-support-tab`}
+            hidden={activeTab !== "support"}
+          >
+            <SettingsPanel title="Support">
+              <DiagnosticsPanel />
+            </SettingsPanel>
+          </div>
+        ) : null}
+        <div
+          className="settings-grid settings-tab-panel"
+          role="tabpanel"
+          id={`${tabsId}-users-panel`}
+          aria-labelledby={`${tabsId}-users-tab`}
+          hidden={activeTab !== "users"}
+        >
+          <SettingsPanel title="Users">
+            <UserManagement canManage={canManageUsers} showToast={showToast} />
+          </SettingsPanel>
+        </div>
       </div>
     </section>
   );
@@ -8345,6 +9150,7 @@ const BackupTool = ({
           </button>
           <input
             value={restoreConfirmation}
+            aria-label="Type RESTORE to confirm replacement"
             placeholder="Type RESTORE"
             onChange={(event) => {
               setRestoreConfirmation(event.target.value);
@@ -8370,7 +9176,7 @@ const BackupStatusBadge = ({ backup }: { readonly backup: BackupRecordDto | null
   }
   return (
     <span className={`backup-badge ${backup.status === "completed" ? "success" : "warning"}`}>
-      {backup.status === "completed" ? "Protected" : "Needs attention"}
+      {backup.status === "completed" ? "Backup completed" : "Needs attention"}
     </span>
   );
 };
@@ -8748,7 +9554,7 @@ const UserManagement = ({
                 <span>{user.username}</span>
               </div>
               <span className={`pill ${user.status === "active" ? "success" : "muted"}`}>
-                {user.status}
+                {displayLabel(user.status)}
               </span>
               <span>{user.roleNames.join(", ")}</span>
               <button
@@ -8892,8 +9698,8 @@ const SettingsPanel = ({
   readonly title: string;
   readonly children: ReactNode;
 }) => (
-  <article className="card settings-panel">
-    <h2>{title}</h2>
+  <article className="card settings-panel" data-settings-section={title}>
+    <h2 tabIndex={-1}>{title}</h2>
     {children}
   </article>
 );
@@ -9095,7 +9901,9 @@ const LoadingState = ({ label }: { readonly label: string }) => (
 );
 
 const Toast = ({ toast }: { readonly toast: ToastState }) => (
-  <div className={`toast ${toast.tone}`}>{toast.message}</div>
+  <div role={toast.tone === "error" ? "alert" : "status"} className={`toast ${toast.tone}`}>
+    {toast.message}
+  </div>
 );
 
 const CatalogSection = ({
@@ -9165,7 +9973,12 @@ const ProductDialog = ({
   const errors = submitted ? productFormErrors(form) : {};
 
   return (
-    <div className="modal-backdrop">
+    <Dialog
+      label={form.id === undefined ? "Add Item" : "Edit Item"}
+      onClose={() => {
+        setForm(null);
+      }}
+    >
       <form
         className="modal"
         noValidate
@@ -9182,6 +9995,7 @@ const ProductDialog = ({
           </div>
           <button
             type="button"
+            aria-label="Close item form"
             onClick={() => {
               setForm(null);
             }}
@@ -9313,7 +10127,7 @@ const ProductDialog = ({
           </button>
         </footer>
       </form>
-    </div>
+    </Dialog>
   );
 };
 
@@ -9466,27 +10280,37 @@ const Field = ({
   readonly required?: boolean;
   readonly helperText?: string;
   readonly error?: string | undefined;
-}) => (
-  <label className={error === undefined ? "field-control" : "field-control has-error"}>
-    <span>{label}</span>
-    <input
-      type={type}
-      step={type === "number" ? "0.01" : undefined}
-      min={type === "number" ? min : undefined}
-      maxLength={maxLength}
-      required={required}
-      aria-invalid={error === undefined ? undefined : true}
-      value={value}
-      onChange={(event) => {
-        onChange(event.target.value);
-      }}
-    />
-    {error === undefined ? null : <small className="field-error">{error}</small>}
-    {error === undefined && helperText.trim().length > 0 ? (
-      <small className="field-help">{helperText}</small>
-    ) : null}
-  </label>
-);
+}) => {
+  const descriptionId = useId();
+  return (
+    <label className={error === undefined ? "field-control" : "field-control has-error"}>
+      <span>{label}</span>
+      <input
+        aria-describedby={error !== undefined || helperText.length > 0 ? descriptionId : undefined}
+        type={type}
+        step={type === "number" ? "0.01" : undefined}
+        min={type === "number" ? min : undefined}
+        maxLength={maxLength}
+        required={required}
+        aria-invalid={error === undefined ? undefined : true}
+        value={value}
+        onChange={(event) => {
+          onChange(event.target.value);
+        }}
+      />
+      {error === undefined ? null : (
+        <small id={descriptionId} className="field-error">
+          {error}
+        </small>
+      )}
+      {error === undefined && helperText.trim().length > 0 ? (
+        <small id={descriptionId} className="field-help">
+          {helperText}
+        </small>
+      ) : null}
+    </label>
+  );
+};
 
 const SelectField = ({
   label,
@@ -9538,4 +10362,10 @@ if (rootElement === null) {
   throw new Error("Root element was not found.");
 }
 
+window.addEventListener("error", (event) => {
+  reportRendererError("error", event.error);
+});
+window.addEventListener("unhandledrejection", (event) => {
+  reportRendererError("unhandled-rejection", event.reason);
+});
 createRoot(rootElement).render(<App />);

@@ -1,0 +1,40 @@
+name: Desktop quality
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  windows-counter:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test:e2e
+      - run: pnpm pack:win
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-check-evidence
+          path: test-results/
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: windows-build-and-symbols-${{ github.sha }}
+          retention-days: 90
+          path: |
+            release/windows/
+            apps/desktop/dist/main/
+            apps/desktop/dist/renderer/
+            apps/desktop/preload.cjs
+            apps/desktop/package.json

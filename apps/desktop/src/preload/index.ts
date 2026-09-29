@@ -1,4 +1,16 @@
 import type {
+  DiagnosticsStatusContract,
+  DiagnosticsNoticeContract,
+  DiagnosticsExportContract,
+  DiagnosticsReportContract
+} from "@orix/electron";
+import type {
+  CounterSummaryContract,
+  CounterOpenContract,
+  CounterCloseContract,
+  CounterExpenseContract
+} from "@orix/electron";
+import type {
   CatalogItemKind,
   CatalogWritePayload,
   IpcChannel,
@@ -107,21 +119,7 @@ import type {
   SupplierStatementRequest,
   SupplierWritePayload
 } from "@orix/electron";
-import type * as Electron from "electron";
-
-type ElectronPreloadRuntime = Pick<typeof Electron, "contextBridge" | "ipcRenderer">;
-
-const electronRuntime = (
-  globalThis as typeof globalThis & {
-    readonly __orixElectron?: ElectronPreloadRuntime;
-  }
-).__orixElectron;
-
-if (electronRuntime === undefined) {
-  throw new Error("Electron preload runtime was not initialized.");
-}
-
-const { contextBridge, ipcRenderer } = electronRuntime;
+import { contextBridge, ipcRenderer } from "electron";
 
 const requestId = (): string => {
   const cryptoApi = globalThis.crypto as
@@ -297,6 +295,18 @@ const reportsApi = {
     request<ReportsSummaryContract["response"]>("orix:reports.summary", payload)
 };
 
+const diagnosticsApi = {
+  status: (): Promise<DiagnosticsStatusContract["response"]> =>
+    request("orix:diagnostics.status", {}),
+  notice: (): Promise<DiagnosticsNoticeContract["response"]> =>
+    request("orix:diagnostics.notice", {}),
+  export: (): Promise<DiagnosticsExportContract["response"]> =>
+    request("orix:diagnostics.export", {}),
+  report: (
+    payload: DiagnosticsReportContract["request"]["payload"]
+  ): Promise<DiagnosticsReportContract["response"]> => request("orix:diagnostics.report", payload)
+};
+
 const settingsApi = {
   get: (): Promise<SettingsGetContract["response"]> =>
     request<SettingsGetContract["response"]>("orix:settings.get", {}),
@@ -375,7 +385,21 @@ const inventoryApi = {
     )
 };
 
+const counterApi = {
+  summary: (): Promise<CounterSummaryContract["response"]> => request("orix:counter.summary", {}),
+  open: (
+    payload: CounterOpenContract["request"]["payload"]
+  ): Promise<CounterOpenContract["response"]> => request("orix:counter.open", payload),
+  close: (
+    payload: CounterCloseContract["request"]["payload"]
+  ): Promise<CounterCloseContract["response"]> => request("orix:counter.close", payload),
+  expense: (
+    payload: CounterExpenseContract["request"]["payload"]
+  ): Promise<CounterExpenseContract["response"]> => request("orix:counter.expense", payload)
+};
+
 contextBridge.exposeInMainWorld("orix", {
+  counter: counterApi,
   app: appApi,
   auth: authApi,
   backups: backupsApi,
@@ -386,6 +410,7 @@ contextBridge.exposeInMainWorld("orix", {
   migration: migrationApi,
   reports: reportsApi,
   settings: settingsApi,
+  diagnostics: diagnosticsApi,
   products: productApi,
   purchases: purchasesApi,
   sales: salesApi,
@@ -394,6 +419,7 @@ contextBridge.exposeInMainWorld("orix", {
 });
 
 export type OrixPreloadApi = {
+  readonly counter: typeof counterApi;
   readonly app: typeof appApi;
   readonly auth: typeof authApi;
   readonly backups: typeof backupsApi;
@@ -404,6 +430,7 @@ export type OrixPreloadApi = {
   readonly migration: typeof migrationApi;
   readonly reports: typeof reportsApi;
   readonly settings: typeof settingsApi;
+  readonly diagnostics: typeof diagnosticsApi;
   readonly products: typeof productApi;
   readonly purchases: typeof purchasesApi;
   readonly sales: typeof salesApi;

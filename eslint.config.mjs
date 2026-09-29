@@ -16,7 +16,8 @@ export default tseslint.config(
       "apps/desktop/*.cjs",
       "commitlint.config.cjs",
       "eslint.config.mjs",
-      "tests/**"
+      "tests/**",
+      "scripts/**"
     ]
   },
   js.configs.recommended,
