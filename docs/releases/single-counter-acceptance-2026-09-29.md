@@ -30,3 +30,16 @@ Desktop version is now `0.1.0-rc.2`. Windows CI is configured to build the actua
 Follow the [Windows rollout checklist](windows-rollout-checklist.md) for installation, peripheral testing, backup restoration, update acceptance and operator handoff. No Windows installer execution, target-machine signoff or release tag is claimed by this preparation. Previously recorded macOS journey evidence predates this packaging-only batch.
 
 Batch 3 local validation: `pnpm check` passed lint, typecheck, build and all 80 tests across 29 files after the version change. Changed release files passed Prettier checks and `git diff --check` reported no whitespace errors. The Windows workflow itself has not been executed in this macOS session; no installer artifact has been produced here.
+
+## Windows CI evidence — 29 September 2026
+
+[Desktop quality run 36597372987](https://github.com/ShairAli10/Orix-Retail-OS/actions/runs/36597372987) succeeded for commit `a82ff052bf5069d954679e3755821ee5031f921f` (desktop `0.1.0-rc.2`):
+
+- Windows lint, typecheck, build and all 80 tests across 29 files passed.
+- All 15 Electron journeys passed on the Windows runner.
+- NSIS x64 installer packaging and installer-identity generation succeeded.
+- Installer/checksum/build record and matching support/symbol artifacts were uploaded with 90-day retention.
+
+The first Windows runs exposed test-harness differences: the initial login needed a distinct readiness wait, and forced termination needed to stop the entire Electron process tree and wait for Windows to release the profile lock before relaunch. The recovery assertion remains enabled and passed; no failing journey was skipped.
+
+This evidence supersedes the earlier statement that Windows CI had not run. It does **not** establish successful installation/update of the packaged executable, physical printer/scanner compatibility, off-device recovery or owner acceptance. Those rollout checklist gates, including the security review, remain pending. Use the artifacts from the exact run above; later documentation-only commits do not change that build identity.
