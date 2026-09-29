@@ -2,6 +2,7 @@ import { _electron as electron } from "@playwright/test";
 import { expect, test } from "./fixtures.js";
 import { resolve, join } from "node:path";
 import { copyFileSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 
 test("owner can reconcile the counter and recover a checkout basket", async () => {
   test.skip(!process.env.ORIX_DEMO_DIRECTORY, "Run pnpm test:e2e for an isolated seeded profile.");
@@ -114,10 +115,21 @@ test("forced process exit is reported on the next launch", async () => {
   const launch = () =>
     electron.launch({ args: [resolve("apps/desktop"), "--demo"], env, timeout: 10000 });
   const first = await launch();
-  await first.firstWindow();
-  const closed = first.waitForEvent("close");
-  first.process().kill("SIGKILL");
-  await closed;
+  await test.step("Launch the first session", async () => {
+    const page = await first.firstWindow();
+    await expect(page.getByLabel("Username", { exact: true })).toBeVisible({ timeout: 15000 });
+  });
+  await test.step("Force-stop the entire Electron process tree", async () => {
+    const closed = first.waitForEvent("close", { timeout: 10000 });
+    // Windows parent-only termination leaves renderer children holding profile
+    // files and inherited pipes open. Match Playwright's process-tree cleanup.
+    if (process.platform === "win32") {
+      execFileSync("taskkill", ["/pid", String(first.process().pid), "/T", "/F"]);
+    } else {
+      first.process().kill("SIGKILL");
+    }
+    await closed;
+  });
   const second = await launch();
   try {
     const page = await second.firstWindow();

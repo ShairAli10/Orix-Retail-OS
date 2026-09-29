@@ -12,6 +12,7 @@ test("Counter expenses and closing explain shortages at desktop widths", async (
   });
   try {
     const page = await app.firstWindow();
+    await expect(page.getByLabel("Username", { exact: true })).toBeVisible({ timeout: 15000 });
     page.setDefaultTimeout(5000);
     await page.getByLabel("Username", { exact: true }).fill("owner");
     await page.locator("input[type=password]").fill("DemoOwner!2026");
