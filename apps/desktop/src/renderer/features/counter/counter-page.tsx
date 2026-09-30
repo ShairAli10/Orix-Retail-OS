@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CounterSummaryDto } from "@orix/electron";
 
 const money = (minor: number) =>
-  new Intl.NumberFormat("en-PK", { style: "currency", currency: "PKR" }).format(minor / 100);
+  new Intl.NumberFormat("en-PK", {
+    style: "currency",
+    currency: "PKR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(minor / 100);
 const varianceLabel = (value: number) =>
   value < 0 ? "Cash shortage" : value > 0 ? "Extra cash" : "Cash matches";
 const minor = (value: string) => Math.round(Number(value) * 100);

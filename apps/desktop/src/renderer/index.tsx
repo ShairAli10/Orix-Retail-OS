@@ -492,6 +492,7 @@ const money = (minor: number): string =>
   new Intl.NumberFormat("en-PK", {
     style: "currency",
     currency: "PKR",
+    minimumFractionDigits: 2,
     maximumFractionDigits: 2
   }).format(minor / 100);
 

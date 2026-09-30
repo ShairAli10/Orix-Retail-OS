@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +12,8 @@ const run = (cmd, args, env = process.env) => {
 };
 const directory = mkdtempSync(join(tmpdir(), "orix-e2e-"));
 try {
+  // Resolve/download Electron before the per-test launch timeout starts.
+  createRequire(new URL("../apps/desktop/package.json", import.meta.url))("electron");
   run(process.execPath, ["scripts/prepare-node.mjs"]);
   run(pnpm, [...pnpmArgs, "build"]);
   run(process.execPath, ["scripts/seed-demo.mjs", "--directory", directory]);
