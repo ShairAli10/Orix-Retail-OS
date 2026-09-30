@@ -14,6 +14,8 @@ Renderer sandboxing is explicit and webviews are disabled. CI audits all depende
 
 The design skill's repository-wide static audit reports 20 existing form/ownership findings outside the changed icon assets; this icon change does not claim a full UI compliance pass.
 
+Validation follow-up: rc.3 application commit `7f15b645b62458b0cf97592d6ab3f2b68baecb86` passed local quality checks (80 tests) and 16 Electron journeys. Windows CI passed the full dependency audit, quality checks, Electron journeys, installer packaging and packaged-app SQLite startup. [Build evidence](https://github.com/ShairAli10/Orix-Retail-OS/actions/runs/36735283519). The full audit had zero known advisories at verification time. Two runtime-upgrade issues were corrected: explicit PKR decimal precision and pre-downloading Electron outside per-test launch timeouts. SQLite's unnecessary install-time compilation was disabled, and a failing hover-position regression was fixed by removing button movement.
+
 ## Scope and evidence
 
 Reviewed the current working tree on main, desktop main/preload/renderer boundaries, IPC authorization, authentication, backups, diagnostics, dependency lockfile, and the previously reported injected ESLint configuration. No production store data was modified. No historical injected code was executed.

@@ -2,6 +2,17 @@
 
 Scope: one store, one offline Windows computer, one counter. No subscription or activation-code product is required.
 
+## rc.3 follow-up — 30 September 2026
+
+Validated application commit: `7f15b645b62458b0cf97592d6ab3f2b68baecb86`.
+
+- Local quality checks passed: lint, typecheck, build and 80 tests across 29 files; all 16 Electron journeys passed. The final hover stability regression also passed after reproducing the moving target.
+- Windows CI passed dependency installation, full security audit, quality checks, all Electron journeys, NSIS installer packaging, and startup of the packaged executable with SQLite. [Windows build and downloads](https://github.com/ShairAli10/Orix-Retail-OS/actions/runs/36735283519).
+- Installer artifact: `windows-installer-7f15b645b62458b0cf97592d6ab3f2b68baecb86` (artifact ID `11106708378`). Contains `Orix-Retail-OS-Setup-0.1.0-rc.3-x64.exe`, `SHA256SUMS.txt`, and the build record. Support symbols and test evidence are separate artifacts. Local download/hash verification has not been performed.
+- Security dependency audit reports no known vulnerabilities. Runtime/tooling upgrades, the Orix cart icon, explicit two-decimal PKR formatting, and stationary button hover targets are included. Applied database migrations were preserved.
+
+This is automated release-candidate evidence. Actual counter hardware/update/recovery acceptance and the workstation security incident investigation remain open; see `security-review-2026-09-30.md`.
+
 ## Batch 2 evidence
 
 - Full quality command: `pnpm check` (lint, typecheck, build, Vitest/database checks).
