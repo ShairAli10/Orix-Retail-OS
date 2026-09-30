@@ -478,12 +478,17 @@ const createMainWindow = (): BrowserWindowType => {
     minHeight: 680,
     show: !isSmokeRun,
     title: "Orix Retail OS",
+    icon: join(app.getAppPath(), "build", process.platform === "win32" ? "icon.ico" : "icon.png"),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webviewTag: false,
       preload: join(fileURLToPath(new URL("../../preload.cjs", import.meta.url)))
     }
   });
+
+  app.dock?.setIcon(join(app.getAppPath(), "build", "icon.png"));
 
   if (isSmokeRun) {
     void window.loadURL(

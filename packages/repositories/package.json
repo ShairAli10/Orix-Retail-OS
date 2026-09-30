@@ -16,6 +16,6 @@
   "dependencies": {
     "@orix/core": "workspace:*",
     "@orix/database": "workspace:*",
-    "drizzle-orm": "^0.38.0"
+    "drizzle-orm": "^0.45.3"
   }
 }

@@ -187,6 +187,8 @@ export class BaseRepository<TTable extends RepositoryTable> {
 
   public async update(
     id: string,
+    // Concrete repository tables supply these keys; the generic constraint alone has none.
+    // eslint-disable-next-line @typescript-eslint/no-generated-empty-object-type
     patch: Partial<RepositoryTableInsert<TTable>>,
     concurrency: OptimisticConcurrency = {}
   ): Promise<CoreResult<RepositoryTableRow<TTable>>> {
@@ -218,6 +220,7 @@ export class BaseRepository<TTable extends RepositoryTable> {
   public async bulkUpdate(
     patches: readonly {
       readonly id: string;
+      // eslint-disable-next-line @typescript-eslint/no-generated-empty-object-type -- Keys are inferred from the concrete Drizzle table.
       readonly patch: Partial<RepositoryTableInsert<TTable>>;
       readonly concurrency?: OptimisticConcurrency;
     }[]
@@ -342,6 +345,7 @@ export class BaseRepository<TTable extends RepositoryTable> {
   private auditPatch(
     patch: Record<string, string | null>,
     metadata: AuditMetadata
+    // eslint-disable-next-line @typescript-eslint/no-generated-empty-object-type -- Keys are inferred from the concrete Drizzle table.
   ): Partial<RepositoryTableInsert<TTable>> {
     const next: Record<string, string | null> = { ...patch };
     if (this.table.updatedAt !== undefined) {

@@ -27,10 +27,10 @@
   },
   "dependencies": {
     "@orix/shared": "workspace:*",
-    "better-sqlite3": "^11.7.0",
-    "drizzle-orm": "^0.38.0"
+    "better-sqlite3": "^13.0.3",
+    "drizzle-orm": "^0.45.3"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12"
+    "@types/better-sqlite3": "^7.6.13"
   }
 }

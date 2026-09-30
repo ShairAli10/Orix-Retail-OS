@@ -3,10 +3,10 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   base: "./",
-  root: resolve(__dirname, "src/renderer"),
+  root: resolve(import.meta.dirname, "src/renderer"),
   build: {
     sourcemap: true,
-    outDir: resolve(__dirname, "dist/renderer"),
+    outDir: resolve(import.meta.dirname, "dist/renderer"),
     emptyOutDir: true
   },
   esbuild: {

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="320" viewBox="0 0 1100 320">
+  <title>Orix Retail</title>
+  <g transform="translate(8 8) scale(.594)"><svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="#0f766e"/>
+  <path d="M102 137h47l38 186h196" fill="none" stroke="#fff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M165 174h236l-25 100H184" fill="none" stroke="#fff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="282" cy="219" r="24" fill="none" stroke="#99f6e4" stroke-width="16"/>
+  <circle cx="211" cy="377" r="23" fill="#fff"/>
+  <circle cx="359" cy="377" r="23" fill="#fff"/>
+</svg>
+</g>
+  <text x="352" y="198" fill="#17202a" font-family="Arial, sans-serif" font-size="104" font-weight="700" letter-spacing="-4">Orix Retail</text>
+</svg>

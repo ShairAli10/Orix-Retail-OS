@@ -21,6 +21,6 @@
     "@orix/shared": "workspace:*"
   },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "44.5.1"
   }
 }

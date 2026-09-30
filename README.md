@@ -16,7 +16,7 @@ returns, stock take, and Windows packaging.
 
 ## Local Prerequisite
 
-Enable pnpm before running workspace commands:
+Use a current Node.js 22 LTS patch (minimum 22.14; `nvm install && nvm use` on macOS). Node 20 is no longer supported by the desktop build tooling. Enable pnpm before running workspace commands:
 
 ```sh
 corepack enable

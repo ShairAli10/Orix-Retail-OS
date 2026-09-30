@@ -10,6 +10,8 @@ files:
   - electron-main.cjs
   - preload.cjs
   - package.json
+  - build/icon.png
+  - build/icon.ico
   - dist/main/**/*
   - dist/renderer/**/*
 
@@ -21,9 +23,11 @@ extraResources:
 
 asar: true
 asarUnpack:
-  - node_modules/better-sqlite3/build/Release/*.node
+  - node_modules/better-sqlite3/prebuilds/*.node
 
-npmRebuild: true
+# SQLite 13 ships Node-API binaries, shared by Node and Electron.
+# Do not replace the packaged Windows binary with a host-specific rebuild.
+npmRebuild: false
 nodeGypRebuild: false
 compression: maximum
 

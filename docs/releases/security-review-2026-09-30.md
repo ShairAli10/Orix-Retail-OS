@@ -2,6 +2,18 @@
 
 **Decision: not yet cleared for live store use.** Functional acceptance and successful installer packaging do not resolve the findings below. This review does not certify the workstation or the application as free of vulnerabilities.
 
+## Remediation follow-up — rc.3
+
+The dependency findings below describe the original review snapshot. The rc.3 lockfile now resolves Electron 44.5.1 (both workspace declarations), Drizzle 0.45.3, SQLite 13.0.3, Vitest/coverage 5.0.3, and Vite 8.3.1. A fresh full `pnpm audit --json` reports **zero known advisories**, including development dependencies. This is a registry snapshot, not a guarantee against undisclosed vulnerabilities.
+
+SQLite 13 uses published Node-API binaries. The obsolete per-runtime rebuild commands were removed, packaging unpacks the supplied binaries, and CI now smoke-tests the packaged Windows executable after building. Development requires a current Node 22 LTS patch (minimum 22.14); `.nvmrc` selects that release line. Applied database migrations were preserved.
+
+Renderer sandboxing is explicit and webviews are disabled. CI audits all dependencies before testing or packaging, and external actions are pinned to commit hashes. The release identity is incremented to `0.1.0-rc.3`, with a new Orix Retail cart icon.
+
+**Still unresolved:** workstation incident investigation/credential review, installer signing, actual counter-PC installation/update and hardware acceptance. Local source/dependency changes cannot close those items. The original optional IPC/permission hardening observations also remain outside this dependency remediation.
+
+The design skill's repository-wide static audit reports 20 existing form/ownership findings outside the changed icon assets; this icon change does not claim a full UI compliance pass.
+
 ## Scope and evidence
 
 Reviewed the current working tree on main, desktop main/preload/renderer boundaries, IPC authorization, authentication, backups, diagnostics, dependency lockfile, and the previously reported injected ESLint configuration. No production store data was modified. No historical injected code was executed.
@@ -56,4 +68,4 @@ Local validation for the accompanying POS changes passed: `pnpm check` (lint, ty
 4. Produce a uniquely versioned Windows candidate and test install/update, scanner, receipt printer, restart, and recovery on the actual counter PC.
 5. Create the real store configuration, restrict Windows access, establish off-device backups, and record final acceptance before live trading.
 
-The dependency upgrades, workstation investigation, and target-PC acceptance are **not completed by this review**.
+At the initial review, dependency upgrades, workstation investigation, and target-PC acceptance were outstanding. See the rc.3 remediation follow-up above for subsequent changes and remaining limits.

@@ -1,6 +1,6 @@
 # Windows diagnostics and manual updates
 
-The desktop version is now `0.1.0-rc.2`. This is a release candidate, not a production certification. Windows installer, actual printer/scanner, dependency maintenance, and remaining financial/recovery acceptance gates still apply.
+The desktop version is now `0.1.0-rc.3`. This is a release candidate, not a production certification. Windows installer, actual printer/scanner, dependency maintenance, and remaining financial/recovery acceptance gates still apply.
 
 ## Store support workflow
 
@@ -30,7 +30,7 @@ The Windows CI workflow builds the NSIS installer and retains two separate artif
 ## Manual update procedure
 
 1. Reproduce the reported issue against the matching build and add a failing regression test.
-2. Increment the desktop version; run `pnpm check`, `pnpm test:e2e`, and Windows `pnpm dist:win`.
+2. Use a current Node.js 22 LTS patch (minimum 22.14). Increment the desktop version; run `pnpm audit:security`, `pnpm check`, `pnpm test:e2e`, and Windows `pnpm dist:win`. The security audit includes development dependencies because Electron ships despite being declared there. Do not bypass a failing audit just to produce an installer.
 3. Test the installer on a copy of the existing store database, including offline startup and peripheral use. Keep an off-device verified backup.
 4. Close the counter and exit Orix. Install the update outside trading hours using the same Windows account.
 5. Start the app and confirm the version, stock/balances, recent sales, and printer operation before trading.
