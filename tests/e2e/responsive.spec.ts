@@ -108,7 +108,13 @@ test("all workspace layouts fit counter windows and detail drawers", async () =>
         `${action}: horizontal overflow`
       ).toBe(true);
       await page.screenshot({ path: `test-results/layout-dialog-${action}.png` });
-      await modal.locator("header button").last().click();
+      const closeButton = modal.locator("header button").last();
+      const beforeHover = await closeButton.boundingBox();
+      await closeButton.hover();
+      expect(await closeButton.boundingBox(), `${action}: hover moved the close target`).toEqual(
+        beforeHover
+      );
+      await closeButton.click();
     }
   } finally {
     await app.close();

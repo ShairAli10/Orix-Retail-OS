@@ -110,13 +110,11 @@ button {
   cursor: pointer;
   transition:
     border-color 0.16s ease,
-    background 0.16s ease,
-    transform 0.16s ease;
+    background 0.16s ease;
 }
 
 button:hover {
   border-color: var(--primary);
-  transform: translateY(-1px);
 }
 
 button:disabled {
