@@ -1,3 +1,4 @@
+import { SearchSelect } from "./components/search-select.js";
 import { localDateTimeInput } from "./presentation/local-time.js";
 import { returnPreview, returnBlockingMessage } from "./features/sales/return-preview.js";
 import { activitySummary, displayLabel } from "./presentation/text.js";
@@ -2588,6 +2589,10 @@ const PosModule = ({
   const [searching, setSearching] = useState(false);
   const [selectedSearchIndex, setSelectedSearchIndex] = useState(0);
   const [customerSearch, setCustomerSearch] = useState("");
+  const [customerMatches, setCustomerMatches] = useState<readonly string[]>([]);
+  const [customersLoading, setCustomersLoading] = useState(true);
+  const [customerSearchError, setCustomerSearchError] = useState(false);
+  const [customerRetry, setCustomerRetry] = useState(0);
   const [barcode, setBarcode] = useState("");
   const [receipt, setReceipt] = useState<ReceiptDto | null>(null);
   const [heldSales, setHeldSales] = useState<readonly SaleListItemDto[]>([]);
@@ -2605,15 +2610,7 @@ const PosModule = ({
   const canPrint = permissions.includes("sales.print");
 
   const loadPosData = useCallback(async () => {
-    const [customersResponse, cashResponse, salesResponse, heldResponse] = await Promise.all([
-      window.orix.customers.list({
-        page: 1,
-        pageSize: 50,
-        sortBy: "name",
-        sortDirection: "asc",
-        status: "active",
-        customerType: "all"
-      }),
+    const [cashResponse, salesResponse, heldResponse] = await Promise.all([
       window.orix.cashRegister.summary(),
       window.orix.sales.dashboard(),
       window.orix.sales.list({
@@ -2624,7 +2621,6 @@ const PosModule = ({
         status: "held"
       })
     ]);
-    if (customersResponse.ok) setCustomers(customersResponse.value.items);
     if (cashResponse.ok) setCashRegister(cashResponse.value);
     if (salesResponse.ok) setSalesDashboard(salesResponse.value);
     if (heldResponse.ok) setHeldSales(heldResponse.value.items);
@@ -2722,19 +2718,28 @@ const PosModule = ({
 
   useEffect(() => {
     let cancelled = false;
-    const timeout = window.setTimeout(() => {
-      void window.orix.customers
-        .list({
-          page: 1,
-          pageSize: 50,
-          sortBy: "name",
-          sortDirection: "asc",
-          status: "active",
-          customerType: "all",
-          search: customerSearch
-        })
-        .then((response) => {
-          if (!cancelled && response.ok)
+    setCustomersLoading(true);
+    setCustomerSearchError(false);
+    setCustomerMatches([]);
+    const timeout = window.setTimeout(
+      () => {
+        void window.orix.customers
+          .list({
+            page: 1,
+            pageSize: 50,
+            sortBy: "name",
+            sortDirection: "asc",
+            status: "active",
+            customerType: "all",
+            search: customerSearch.trim()
+          })
+          .then((response) => {
+            if (cancelled) return;
+            if (!response.ok) {
+              setCustomerSearchError(true);
+              return;
+            }
+            setCustomerMatches(response.value.items.map((customer) => customer.id));
             setCustomers((previous) => {
               const selected = previous.find((customer) => customer.id === form.customerId);
               return selected &&
@@ -2742,16 +2747,21 @@ const PosModule = ({
                 ? [selected, ...response.value.items]
                 : response.value.items;
             });
-        })
-        .catch(() => {
-          if (!cancelled) showToast("Customer search failed.", "error");
-        });
-    }, 150);
+          })
+          .catch(() => {
+            if (!cancelled) setCustomerSearchError(true);
+          })
+          .finally(() => {
+            if (!cancelled) setCustomersLoading(false);
+          });
+      },
+      customerSearch.trim() ? 150 : 0
+    );
     return () => {
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [customerSearch, form.customerId, showToast]);
+  }, [customerSearch, form.customerId, customerRetry]);
 
   const addProduct = (product: ProductListItemDto) => {
     if (product.archivedAt !== null || product.status !== "active") {
@@ -3113,8 +3123,11 @@ const PosModule = ({
                 }}
               />
               <button
-                className="icon-button"
+                type="button"
                 aria-label="Add scanned item"
+                title="Add scanned item (Enter)"
+                className="barcode-add-button"
+                disabled={!barcode.trim() || saleProcessing !== null}
                 onClick={() => {
                   void scanBarcode();
                 }}
@@ -3225,31 +3238,39 @@ const PosModule = ({
               <Icon name="user" />
               Customer
             </h2>
-            <label className="field-control">
-              <span>Find customer</span>
-              <input
-                value={customerSearch}
-                placeholder="Name or phone"
-                onChange={(event) => {
-                  setCustomerSearch(event.target.value);
-                }}
-              />
-            </label>
-            <select
+            <SearchSelect
               id="pos-customer"
-              aria-label="Customer"
-              value={form.customerId}
-              onChange={(event) => {
-                setForm({ ...form, customerId: event.target.value });
+              label="Customer"
+              selected={{
+                id: form.customerId,
+                label: selectedCustomer?.name ?? "Walk-in Customer"
               }}
-            >
-              <option value="">Walk-in Customer</option>
-              {customers.map((customer) => (
-                <option value={customer.id} key={customer.id}>
-                  {customer.name} {customer.phone === null ? "" : `· ${customer.phone}`}
-                </option>
-              ))}
-            </select>
+              options={[
+                { id: "", label: "Walk-in Customer" },
+                ...customers
+                  .filter((customer) => customerMatches.includes(customer.id))
+                  .map((customer) => ({
+                    id: customer.id,
+                    label: customer.name,
+                    description: customer.phone ?? undefined
+                  }))
+              ]}
+              loading={customersLoading}
+              error={customerSearchError}
+              onSearch={(query) => {
+                if (query !== customerSearch) {
+                  setCustomerSearch(query);
+                  setCustomersLoading(true);
+                  setCustomerMatches([]);
+                }
+              }}
+              onSelect={(customer) => {
+                setForm((previous) => ({ ...previous, customerId: customer.id }));
+              }}
+              onRetry={() => {
+                setCustomerRetry((value) => value + 1);
+              }}
+            />
           </div>
           <div className="card pos-card totals-card">
             <div className="pos-total-banner">
