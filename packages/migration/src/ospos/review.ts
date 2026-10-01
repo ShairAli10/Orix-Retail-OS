@@ -20,6 +20,18 @@ export const reviewProducts = (
       if (!row.name.trim()) errors.push("Enter a product name.");
       if (!Number.isFinite(row.openingStock)) errors.push("Enter a valid opening quantity.");
       else if (row.openingStock < 0) errors.push("Opening stock cannot be negative.");
+      else if (!Number.isSafeInteger(Math.round(row.openingStock * 1000000)))
+        errors.push(
+          "Opening stock exceeds the safe quantity limit. Correct the quantity or exclude this item."
+        );
+      if (
+        Number.isFinite(row.openingStock) &&
+        Number.isSafeInteger(row.purchasePriceMinor) &&
+        !Number.isSafeInteger(Math.round(row.openingStock * row.purchasePriceMinor))
+      )
+        errors.push(
+          "Stock value is too large. Check the opening quantity and purchase cost, or exclude this item."
+        );
       if (!Number.isFinite(row.minimumStock) || row.minimumStock < 0)
         errors.push("Minimum stock must be zero or higher.");
       if (

@@ -15,6 +15,22 @@ const product: LegacyStockImportProductDto = {
   archived: false
 };
 describe("import corrections", () => {
+  it("blocks excessive quantities and stock values before final import", () => {
+    expect(
+      reviewProducts([{ ...product, openingStock: 99999999999 }], [])
+        .get("1")
+        ?.errors.join(" ")
+    ).toContain("safe quantity limit");
+    expect(
+      reviewProducts(
+        [{ ...product, openingStock: 2, purchasePriceMinor: Number.MAX_SAFE_INTEGER }],
+        []
+      )
+        .get("1")
+        ?.errors.join(" ")
+    ).toContain("Stock value");
+    expect(reviewProducts([{ ...product, openingStock: 0.125 }], []).get("1")?.errors).toEqual([]);
+  });
   it("revalidates duplicate barcodes after an owner edits or excludes a row", () => {
     const second = { ...product, sourceItemId: "2", name: "Coffee" };
     expect(reviewProducts([product, second], []).get("1")?.errors).toContain(

@@ -218,6 +218,30 @@ export const SqlImport = ({
   const included =
     draft?.products.filter((row) => !draft.excluded.includes(row.sourceItemId)) ?? [];
   const blocked = included.filter((row) => reviews.get(row.sourceItemId)?.errors.length);
+  const stockValueSafe = Number.isSafeInteger(
+    included.reduce((sum, row) => sum + Math.round(row.openingStock * row.purchasePriceMinor), 0)
+  );
+  const importBlockedReason =
+    blocked.length > 0
+      ? `${String(blocked.length)} selected ${blocked.length === 1 ? "item needs" : "items need"} correction before importing.`
+      : preview?.blockers.length
+        ? preview.blockers.join(" ")
+        : included.length +
+              (draft?.contacts.length ?? 0) -
+              (draft?.excludedContacts.length ?? 0) ===
+            0
+          ? "Select at least one product or contact to import."
+          : !stockValueSafe
+            ? "Combined stock value exceeds the supported limit. Review opening quantities and purchase costs before importing."
+            : !draft?.acceptedWarnings
+              ? "Confirm the opening quantities and warnings before importing."
+              : "";
+  const reviewBlocked = () => {
+    setStep("products");
+    setFilter("blocked");
+    setQuery("");
+    setPage(1);
+  };
   const warned = included.filter((row) => reviews.get(row.sourceItemId)?.warnings.length);
   const filtered =
     draft?.products.filter((row) => {
@@ -296,8 +320,8 @@ export const SqlImport = ({
     return (
       <div className="page-stack">
         <p>
-          Bring products, opening stock and contacts from a previous POS SQL export into a review. Your
-          store stays unchanged until a verified import is confirmed.
+          Bring products, opening stock and contacts from a previous POS SQL export into a review.
+          Your store stays unchanged until a verified import is confirmed.
         </p>
         <button
           className="primary"
@@ -444,6 +468,7 @@ export const SqlImport = ({
                     <label>
                       Show
                       <select
+                        aria-label="Product review status"
                         value={filter}
                         onChange={(e) => {
                           setFilter(e.target.value);
@@ -662,6 +687,41 @@ export const SqlImport = ({
               {step === "summary" && (
                 <div className="page-stack">
                   <h3>Review summary</h3>
+                  {blocked.length > 0 && (
+                    <section aria-label="Items blocking import" className="card">
+                      <h4>{blocked.length} selected items block import</h4>
+                      <p>
+                        Correct the highlighted fields or exclude these items. Your edits and
+                        exclusions are kept while you review.
+                      </p>
+                      <ul>
+                        {blocked.slice(0, 5).map((row) => (
+                          <li key={row.sourceItemId}>
+                            <strong>
+                              {row.name} ·{" "}
+                              {row.barcode
+                                ? `Barcode ${row.barcode}`
+                                : `Source item ${row.sourceItemId}`}
+                            </strong>
+                            <p>
+                              Opening quantity: {row.openingStock.toLocaleString("en-PK")} ·
+                              Purchase cost: {money(row.purchasePriceMinor)}
+                            </p>
+                            <p>{reviews.get(row.sourceItemId)?.errors.join(" ")}</p>
+                            <button
+                              onClick={() => {
+                                setEditing(row);
+                              }}
+                            >
+                              Review item
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                      {blocked.length > 5 && <p>{blocked.length - 5} more blocked items.</p>}
+                      <button onClick={reviewBlocked}>Review blocked items</button>
+                    </section>
+                  )}
                   <p>
                     {included.length} products selected; {blocked.length} still have blocking
                     errors. {draft.contacts.length - draft.excludedContacts.length} contacts
@@ -710,6 +770,11 @@ export const SqlImport = ({
         {draft && (
           <footer>
             <span>{dirty ? "Unsaved review changes" : "Review changes saved or unchanged"}</span>
+            {step === "summary" && importBlockedReason && (
+              <p id="import-blocked-reason" role="status">
+                {importBlockedReason}
+              </p>
+            )}
             <div className="import-actions">
               <button disabled={busy} onClick={saveDraft}>
                 Save draft
@@ -717,12 +782,8 @@ export const SqlImport = ({
               {step === "summary" && (
                 <button
                   className="primary"
-                  disabled={
-                    busy ||
-                    blocked.length > 0 ||
-                    !!preview?.blockers.length ||
-                    !draft.acceptedWarnings
-                  }
+                  aria-describedby={importBlockedReason ? "import-blocked-reason" : undefined}
+                  disabled={busy || Boolean(importBlockedReason)}
                   onClick={() => {
                     void postImport();
                   }}

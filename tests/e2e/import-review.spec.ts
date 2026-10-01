@@ -43,6 +43,19 @@ DROP TABLE products;`
     await page.getByRole("button", { name: "Choose SQL file", exact: true }).click();
     await expect(page.getByText("Source shop", { exact: false })).toBeVisible();
     await expect(page.getByText("Opening stock cannot be negative.")).toBeVisible();
+    await page.getByRole("button", { name: "3. Review summary", exact: true }).click();
+    const blockers = page.getByRole("region", { name: "Items blocking import" });
+    await expect(blockers).toContainText("Import Tea");
+    await expect(blockers).toContainText("Opening stock cannot be negative.");
+    await expect(
+      page.getByRole("button", { name: "Create backup & import", exact: true })
+    ).toBeDisabled();
+    await expect(page.locator("#import-blocked-reason")).toContainText(
+      "correction before importing"
+    );
+    await page.getByRole("button", { name: "Review blocked items", exact: true }).click();
+    await expect(page.getByLabel("Product review status", { exact: true })).toHaveValue("blocked");
+    await page.getByLabel("Product review status", { exact: true }).selectOption("all");
     const row = page.getByRole("row").filter({ hasText: "Import Tea" });
     await row.getByRole("button", { name: "Edit", exact: true }).click();
     await page.getByLabel("Barcode", { exact: true }).fill("TEA-NEW");
