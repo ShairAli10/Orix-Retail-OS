@@ -1918,7 +1918,9 @@ const registerAppHandlers = (state: AppState): void => {
         currentUser: user?.name ?? "Owner",
         currentUserId: state.userId,
         currentBranch: branch?.name ?? "Main Branch",
-        businessDate: day?.businessDate ?? new Date().toISOString().slice(0, 10),
+        businessDate:
+          day?.businessDate ??
+          businessDate(new Date(), storeProfile(state.connection, state.storeId).timezone),
         applicationVersion: app.getVersion(),
         databaseConnected: true,
         syncStatus: "offline",
@@ -1963,7 +1965,9 @@ const registerAppHandlers = (state: AppState): void => {
         "SELECT COALESCE(SUM(amount_minor), 0) AS amount FROM supplier_payments WHERE business_day_id = ? AND status = 'recorded'",
         state.businessDayId
       );
-      const monthStart = `${new Date().toISOString().slice(0, 7)}-01T00:00:00.000Z`;
+      const timezone = storeProfile(state.connection, state.storeId).timezone;
+      const localToday = businessDate(new Date(), timezone);
+      const monthStart = `${localToday.slice(0, 7)}-01`;
       const purchasesThisMonthMinor = moneyAmount(
         state.connection,
         "SELECT COALESCE(SUM(total_minor), 0) AS amount FROM purchases WHERE store_id = ? AND status = 'received' AND purchase_date >= ?",
@@ -1974,14 +1978,13 @@ const registerAppHandlers = (state: AppState): void => {
       const customersAddedTodayResult = state.connection.sqlite
         .prepare("SELECT business_date AS businessDate FROM business_days WHERE id = ?")
         .get(state.businessDayId) as { readonly businessDate: string } | undefined;
+      const customerDay = customersAddedTodayResult?.businessDate ?? localToday;
+      const customerRange = businessDateRange(customerDay, customerDay, timezone);
       const customersAddedToday = state.connection.sqlite
         .prepare(
-          "SELECT COUNT(*) AS count FROM customers WHERE store_id = ? AND substr(created_at, 1, 10) = ?"
+          "SELECT COUNT(*) AS count FROM customers WHERE store_id = ? AND created_at >= ? AND created_at <= ?"
         )
-        .get(
-          state.storeId,
-          customersAddedTodayResult?.businessDate ?? new Date().toISOString().slice(0, 10)
-        ) as CountRow;
+        .get(state.storeId, customerRange.from, customerRange.to) as CountRow;
       const topDebtors = state.connection.sqlite
         .prepare(
           `SELECT c.id, c.name, c.phone, c.notes,

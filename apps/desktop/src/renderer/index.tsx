@@ -1,5 +1,5 @@
 import { SearchSelect } from "./components/search-select.js";
-import { localDateTimeInput } from "./presentation/local-time.js";
+import { localDateTimeInput, localDateInput, displayLocalDate } from "./presentation/local-time.js";
 import { returnPreview, returnBlockingMessage } from "./features/sales/return-preview.js";
 import { activitySummary, displayLabel } from "./presentation/text.js";
 import {
@@ -431,7 +431,7 @@ const emptyCustomerForm: CustomerFormState = {
   customerType: "regular",
   creditLimit: "0",
   openingBalance: "0",
-  openingBalanceDate: new Date().toISOString().slice(0, 10),
+  openingBalanceDate: localDateInput(),
   notes: ""
 };
 
@@ -446,7 +446,7 @@ const emptySupplierForm: SupplierFormState = {
   tags: "",
   creditTerms: "Due on receipt",
   openingBalance: "0",
-  openingBalanceDate: new Date().toISOString().slice(0, 10),
+  openingBalanceDate: localDateInput(),
   notes: ""
 };
 
@@ -463,7 +463,7 @@ const emptyPurchaseForm: PurchaseFormState = {
   supplierId: "",
   invoiceNumber: "",
   purchaseNumber: "",
-  purchaseDate: new Date().toISOString().slice(0, 10),
+  purchaseDate: localDateInput(),
   dueDate: "",
   discount: "0",
   tax: "0",
@@ -1741,7 +1741,7 @@ const CustomerModule = ({
             className="primary"
             disabled={!canCreate}
             onClick={() => {
-              setForm(emptyCustomerForm);
+              setForm({ ...emptyCustomerForm, openingBalanceDate: localDateInput() });
             }}
           >
             New Customer
@@ -2497,7 +2497,7 @@ const CustomerProfileDrawer = ({
                 ) : (
                   statement?.items.map((line) => (
                     <tr key={line.id}>
-                      <td>{new Date(line.date).toLocaleDateString("en-PK")}</td>
+                      <td>{displayLocalDate(line.date)}</td>
                       <td>
                         {line.description}
                         {line.reference &&
@@ -4557,7 +4557,7 @@ const SupplierModule = ({
             className="primary"
             disabled={!canCreate}
             onClick={() => {
-              setForm(emptySupplierForm);
+              setForm({ ...emptySupplierForm, openingBalanceDate: localDateInput() });
             }}
           >
             New Supplier
@@ -5171,7 +5171,7 @@ const SupplierProfileDrawer = ({
                 ) : (
                   statement?.items.map((line) => (
                     <tr key={line.id}>
-                      <td>{new Date(line.date).toLocaleDateString("en-PK")}</td>
+                      <td>{displayLocalDate(line.date)}</td>
                       <td>{line.reference}</td>
                       <td>{line.description}</td>
                       <td>{line.debitMinor === 0 ? "-" : money(line.debitMinor)}</td>
@@ -5247,7 +5247,7 @@ const PurchaseModule = ({
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState<PurchaseFormState | null>(() =>
     initialSupplierId && permissions.includes("purchases.create")
-      ? { ...emptyPurchaseForm, supplierId: initialSupplierId }
+      ? { ...emptyPurchaseForm, purchaseDate: localDateInput(), supplierId: initialSupplierId }
       : null
   );
   const [detail, setDetail] = useState<PurchaseDetailDto | null>(null);
@@ -5467,7 +5467,7 @@ const PurchaseModule = ({
             className="primary"
             disabled={!canCreate}
             onClick={() => {
-              setForm(emptyPurchaseForm);
+              setForm({ ...emptyPurchaseForm, purchaseDate: localDateInput() });
             }}
           >
             New Purchase
@@ -5566,7 +5566,7 @@ const PurchaseModule = ({
                     </button>
                     <span className="sale-secondary">{purchase.supplierName}</span>
                   </td>
-                  <td>{new Date(purchase.purchaseDate).toLocaleDateString("en-PK")}</td>
+                  <td>{displayLocalDate(purchase.purchaseDate)}</td>
                   <td>{money(purchase.totalMinor)}</td>
                   <td>
                     {purchase.status === "received" ? (
@@ -6046,12 +6046,12 @@ const PurchaseDetailsDrawer = ({
         <Detail label="Invoice" value={purchase.invoiceNumber ?? "-"} />
         <Detail
           label="Purchase Date"
-          value={new Date(purchase.purchaseDate).toLocaleDateString("en-PK")}
+          value={displayLocalDate(purchase.purchaseDate)}
         />
         <Detail
           label="Due Date"
           value={
-            purchase.dueDate === null ? "-" : new Date(purchase.dueDate).toLocaleDateString("en-PK")
+            purchase.dueDate === null ? "-" : displayLocalDate(purchase.dueDate)
           }
         />
         <Detail label="Subtotal" value={money(purchase.subtotalMinor)} />
@@ -6224,7 +6224,7 @@ const ReportsModule = ({
 }: {
   readonly showToast: (message: string, tone?: ToastState["tone"]) => void;
 }) => {
-  const today = new Date().toLocaleDateString("en-CA");
+  const today = localDateInput();
   const [dateFrom, setDateFrom] = useState(today);
   const [dateTo, setDateTo] = useState(today);
   const [activeTab, setActiveTab] = useState<ReportTab>("sales");
@@ -6287,7 +6287,7 @@ const ReportsModule = ({
     downloadCsv(
       activeTab === "sales"
         ? `orix-sales-${report.dateFrom}-to-${report.dateTo}.csv`
-        : `orix-${activeTab}-${report.generatedAt.slice(0, 10)}.csv`,
+        : `orix-${activeTab}-${localDateInput(new Date(report.generatedAt))}.csv`,
       reportCsvRows(report, activeTab)
     );
     showToast("Report exported.");
@@ -7572,7 +7572,7 @@ const InventoryModule = ({
         productId: products[0]?.id ?? "",
         quantity: "1",
         unitCost: "0",
-        occurredAt: new Date().toISOString().slice(0, 16),
+        occurredAt: localDateTimeInput(),
         notes: ""
       }
     ]);
@@ -7592,7 +7592,7 @@ const InventoryModule = ({
           productId: product?.id ?? "",
           quantity: quantity.trim(),
           unitCost: unitCost.trim(),
-          occurredAt: new Date().toISOString().slice(0, 16),
+          occurredAt: localDateTimeInput(),
           notes: notes.trim()
         };
       });
@@ -7631,7 +7631,7 @@ const InventoryModule = ({
                 quantity: "1",
                 unitCost: "0",
                 reason: "manual-correction",
-                occurredAt: new Date().toISOString().slice(0, 16),
+                occurredAt: localDateTimeInput(),
                 notes: ""
               });
             }}
@@ -7868,7 +7868,7 @@ const InventoryModule = ({
                                 quantity: "1",
                                 unitCost: fromMinor(item.purchasePriceMinor),
                                 reason: "manual-correction",
-                                occurredAt: new Date().toISOString().slice(0, 16),
+                                occurredAt: localDateTimeInput(),
                                 notes: ""
                               });
                             }}

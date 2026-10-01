@@ -1,6 +1,6 @@
 # Windows diagnostics and manual updates
 
-The desktop version is now `0.1.0-rc.3`. This is a release candidate, not a production certification. Windows installer, actual printer/scanner, dependency maintenance, and remaining financial/recovery acceptance gates still apply.
+The desktop version is now `0.1.0-rc.4`. This is a release candidate, not a production certification. Windows installer, actual printer/scanner, dependency maintenance, and remaining financial/recovery acceptance gates still apply.
 
 ## Store support workflow
 

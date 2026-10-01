@@ -39,3 +39,7 @@ pnpm dist:win
 `pnpm dist:win` creates the Windows installer in `release/windows/`. Customer data is stored under
 Electron `userData`, so installing a newer version updates the app without replacing the SQLite
 database.
+
+## Windows installer guide
+
+See [Build and download Orix Retail](docs/releases/build-and-download-guide.md) for the direct installer link, GitHub Actions instructions, local build commands, and update steps.
