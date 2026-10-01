@@ -8,6 +8,7 @@ import type {
   CounterSummaryContract,
   CounterOpenContract,
   CounterCloseContract,
+  CounterReopenContract,
   CounterExpenseContract
 } from "@orix/electron";
 import type {
@@ -84,11 +85,13 @@ import type {
   AppSettingsDto,
   BackupCreateContract,
   BackupRestoreContract,
+  StoreDataResetContract,
   BackupSelectDirectoryContract,
   BackupSelectFileContract,
   BackupStatusContract,
   BackupVerifyContract,
   LegacyStockImportContract,
+  LegacyStockImportLastContract,
   LegacyStockImportPayload,
   LegacyStockImportPreviewContract,
   LegacyStockImportPreviewPayload,
@@ -332,6 +335,14 @@ const backupsApi = {
 };
 
 const migrationApi = {
+  resetStoreData: (
+    payload: StoreDataResetContract["request"]["payload"]
+  ): Promise<StoreDataResetContract["response"]> => request("orix:store.reset-data", payload),
+  lastImport: (): Promise<LegacyStockImportLastContract["response"]> =>
+    request<LegacyStockImportLastContract["response"]>(
+      "orix:migration.legacy-stock.last-result",
+      {}
+    ),
   selectLegacyStockFiles: (): Promise<LegacyStockImportSelectFilesContract["response"]> =>
     request<LegacyStockImportSelectFilesContract["response"]>(
       "orix:migration.legacy-stock.select-files",
@@ -386,6 +397,9 @@ const inventoryApi = {
 };
 
 const counterApi = {
+  reopen: (
+    payload: CounterReopenContract["request"]["payload"]
+  ): Promise<CounterReopenContract["response"]> => request("orix:counter.reopen", payload),
   summary: (): Promise<CounterSummaryContract["response"]> => request("orix:counter.summary", {}),
   open: (
     payload: CounterOpenContract["request"]["payload"]

@@ -44,6 +44,24 @@ test("Counter expenses and closing explain shortages at desktop widths", async (
     await expect(
       counter.getByRole("button", { name: "Record Expense", exact: true })
     ).toBeDisabled();
+    const closed = await page.evaluate(() => window.orix.counter.summary());
+    await expect(
+      counter.getByRole("button", { name: "Reopen counter", exact: true })
+    ).toBeDisabled();
+    await counter.getByLabel("Reason for reopening").fill("Closed before the final customer");
+    await counter.getByRole("button", { name: "Reopen counter", exact: true }).click();
+    await expect(counter.getByText("Counter is open", { exact: true })).toBeVisible();
+    await expect(counter.getByLabel("Counted cash", { exact: true })).toHaveValue("");
+    const reopened = await page.evaluate(() => window.orix.counter.summary());
+    expect(
+      closed.ok && reopened.ok && reopened.value.session?.id === closed.value.session?.id
+    ).toBe(true);
+    expect(
+      closed.ok &&
+        reopened.ok &&
+        reopened.value.expectedCashMinor === closed.value.expectedCashMinor
+    ).toBe(true);
+    await expect(page.locator(".title-bar")).toContainText("Business Day Open");
   } finally {
     await app.close();
   }

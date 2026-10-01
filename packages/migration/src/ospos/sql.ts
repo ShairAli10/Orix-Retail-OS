@@ -49,95 +49,152 @@ export const parseOspoStockLocations = (content: string): readonly OspoStockLoca
     deleted: row.deleted === "1"
   }));
 
-export const extractInsertRows = (content: string, tableName: string): readonly InsertRow[] => {
-  const rows: InsertRow[] = [];
-  const expression = new RegExp(
-    `INSERT INTO \`${escapeRegExp(tableName)}\` \\(([^)]+)\\) VALUES\\s*([\\s\\S]*?);`,
-    "g"
-  );
-
-  for (const match of content.matchAll(expression)) {
-    const columnsText = match[1];
-    const valuesText = match[2];
-    if (columnsText === undefined || valuesText === undefined) {
-      continue;
-    }
-    const columns = columnsText.split(",").map((column) => column.trim().replaceAll("`", ""));
-    for (const tuple of parseSqlValueTuples(valuesText)) {
-      const row: Record<string, string | null> = {};
-      columns.forEach((column, index) => {
-        row[column] = tuple[index] ?? null;
-      });
-      rows.push(row);
-    }
-  }
-
-  return rows;
-};
-
-export const parseSqlValueTuples = (text: string): readonly (readonly (string | null)[])[] => {
-  const tuples: (string | null)[][] = [];
-  let tuple: (string | null)[] | null = null;
-  let value = "";
-  let inString = false;
-
-  const pushValue = (): void => {
-    if (tuple === null) {
-      return;
-    }
-    const trimmed = value.trim();
-    tuple.push(trimmed.toUpperCase() === "NULL" ? null : trimmed);
-    value = "";
-  };
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    const next = text[index + 1];
-
-    if (tuple === null) {
-      if (char === "(") {
-        tuple = [];
-        value = "";
+/** Read data statements only; never execute source SQL. */
+export const extractInsertTables = (
+  content: string,
+  requested: readonly string[]
+): ReadonlyMap<string, readonly InsertRow[]> => {
+  const wanted = new Set(requested);
+  const tables = new Map<string, InsertRow[]>();
+  let start = 0;
+  let quoted = false;
+  let lineComment = false;
+  let blockComment = false;
+  for (let i = 0; i < content.length; i += 1) {
+    const char = content[i];
+    const next = content[i + 1];
+    if (lineComment) {
+      if (char === "\n") {
+        lineComment = false;
+        start = i + 1;
       }
       continue;
     }
-
-    if (inString) {
-      if (char === "\\" && next !== undefined) {
-        value += next;
-        index += 1;
+    if (blockComment) {
+      if (char === "*" && next === "/") {
+        blockComment = false;
+        i += 1;
+        start = i + 1;
+      }
+      continue;
+    }
+    if (quoted) {
+      if (char === "\\") {
+        i += 1;
         continue;
       }
       if (char === "'" && next === "'") {
-        value += "'";
-        index += 1;
+        i += 1;
         continue;
       }
-      if (char === "'") {
-        inString = false;
-        continue;
-      }
-      value += char ?? "";
+      if (char === "'") quoted = false;
       continue;
     }
-
     if (char === "'") {
-      inString = true;
+      quoted = true;
       continue;
     }
-    if (char === ",") {
-      pushValue();
+    if ((char === "-" && next === "-") || char === "#") {
+      lineComment = true;
       continue;
     }
-    if (char === ")") {
-      pushValue();
-      tuples.push(tuple);
-      tuple = null;
+    if (char === "/" && next === "*") {
+      blockComment = true;
+      i += 1;
       continue;
     }
-    value += char ?? "";
+    if (char !== ";") continue;
+    const statement = content.slice(start, i).trim();
+    start = i + 1;
+    const table = /^INSERT\s+INTO\s+`([^`]+)`/i.exec(statement)?.[1];
+    if (!table || !wanted.has(table)) continue;
+    const match = /^INSERT\s+INTO\s+`[^`]+`\s*\(([^)]+)\)\s*VALUES\s*([\s\S]+)$/i.exec(statement);
+    if (!match?.[1] || !match[2]) throw new Error("Unsupported INSERT format in " + table);
+    const columns = match[1].split(",").map((column) => column.trim().replaceAll("`", ""));
+    const rows = tables.get(table) ?? [];
+    for (const tuple of parseSqlValueTuples(match[2])) {
+      if (tuple.length !== columns.length) throw new Error("Column count mismatch in " + table);
+      rows.push(Object.fromEntries(columns.map((column, index) => [column, tuple[index] ?? null])));
+    }
+    tables.set(table, rows);
   }
+  if (quoted || blockComment || /^\s*INSERT\s/i.test(content.slice(start)))
+    throw new Error("SQL dump is incomplete.");
+  return tables;
+};
 
+export const extractInsertRows = (content: string, tableName: string): readonly InsertRow[] =>
+  extractInsertTables(content, [tableName]).get(tableName) ?? [];
+
+export const parseSqlValueTuples = (text: string): readonly (readonly (string | null)[])[] => {
+  const tuples: (string | null)[][] = [];
+  let index = 0;
+  const whitespace = () => {
+    while (/\s/.test(text[index] ?? "") && index < text.length) index += 1;
+  };
+  while (index < text.length) {
+    whitespace();
+    if (index === text.length) break;
+    if (text[index++] !== "(") throw new Error("Invalid SQL row.");
+    const row: (string | null)[] = [];
+    let rowClosed = false;
+    while (index < text.length) {
+      whitespace();
+      if (text[index] === "'") {
+        index += 1;
+        let value = "";
+        let closed = false;
+        while (index < text.length) {
+          const char = text[index++];
+          if (char === "\\") {
+            const escaped = text[index++];
+            if (escaped === undefined) throw new Error("Incomplete SQL string.");
+            const escapes: Record<string, string> = {
+              n: "\n",
+              r: "\r",
+              t: "\t",
+              "0": "\0",
+              b: "\b",
+              Z: "\x1a"
+            };
+            value += escapes[escaped] ?? escaped;
+          } else if (char === "'") {
+            if (text[index] === "'") {
+              value += "'";
+              index += 1;
+            } else {
+              closed = true;
+              break;
+            }
+          } else value += char ?? "";
+        }
+        if (!closed) throw new Error("Incomplete SQL string.");
+        row.push(value);
+      } else {
+        const start = index;
+        while (index < text.length && text[index] !== "," && text[index] !== ")") index += 1;
+        const value = text.slice(start, index).trim();
+        if (/^NULL$/i.test(value)) row.push(null);
+        else if (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)) row.push(value);
+        else throw new Error("Unsupported SQL value.");
+      }
+      whitespace();
+      const separator = text[index++];
+      if (separator === ")") {
+        tuples.push(row);
+        rowClosed = true;
+        break;
+      }
+      if (separator !== ",") throw new Error("Incomplete SQL row.");
+    }
+    if (!rowClosed) throw new Error("Incomplete SQL row.");
+    whitespace();
+    if (index < text.length) {
+      if (text[index++] !== ",") throw new Error("Invalid SQL rows.");
+      whitespace();
+      if (index === text.length) throw new Error("Incomplete SQL rows.");
+    }
+  }
   return tuples;
 };
 
@@ -162,5 +219,3 @@ const decimal = (value: string | null | undefined): number => {
   const parsed = Number.parseFloat(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 };
-
-const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

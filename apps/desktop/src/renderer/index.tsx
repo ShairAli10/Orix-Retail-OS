@@ -1,3 +1,6 @@
+import { salesPeriodRange, type SalesPeriod } from "./presentation/sales-period.js";
+import { ResetStoreData } from "./features/import/reset-store.js";
+import { SqlImport } from "./features/import/sql-import.js";
 import { SearchSelect } from "./components/search-select.js";
 import { localDateTimeInput, localDateInput, displayLocalDate } from "./presentation/local-time.js";
 import { returnPreview, returnBlockingMessage } from "./features/sales/return-preview.js";
@@ -46,10 +49,7 @@ import type {
   StockTakeDetailDto,
   StockTakeListItemDto,
   StockTakeStartPayload,
-  MigrationIssueDto,
   OpeningStockEntryPayload,
-  LegacyStockImportPreviewDto,
-  LegacyStockImportResultDto,
   ProductCatalogDto,
   ProductDetailDto,
   ProductFormPayload,
@@ -553,6 +553,9 @@ const App = () => {
   const [purchaseSupplier, setPurchaseSupplier] = useState<string | null>(null);
   const [clock, setClock] = useState(() => new Date());
 
+  const [logoutPrompt, setLogoutPrompt] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
   const navigate = useCallback((nextRoute: RouteId) => {
     if (nextRoute !== "suppliers") setSupplierAccount(null);
     if (nextRoute !== "purchases") setPurchaseSupplier(null);
@@ -567,6 +570,22 @@ const App = () => {
       setToast(null);
     }, 3200);
   }, []);
+
+  const logout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      const response = await window.orix.auth.logout();
+      if (!response.ok) { showToast(response.error.message, "error"); return; }
+      setLogoutPrompt(false);
+      setContext(null);
+      setToast(null);
+      setAuthStatus(response.value);
+      navigate("dashboard");
+    } catch {
+      showToast("Could not log out. Please try again.", "error");
+    } finally { setLoggingOut(false); }
+  };
 
   const applyThemePreference = useCallback((theme: AppSettingsDto["theme"]) => {
     const resolved = resolveThemePreference(
@@ -817,7 +836,6 @@ const App = () => {
           onSaved={(nextSettings) => {
             setSettings(nextSettings);
             rememberThemePreference(nextSettings.theme);
-            showToast("Settings saved.");
           }}
           onThemePreview={rememberThemePreference}
           showToast={showToast}
@@ -879,7 +897,7 @@ const App = () => {
     <ErrorBoundary>
       <main className="desktop-shell">
         <DiagnosticNotice />
-        <TitleBar context={context} clock={clock} onNavigate={navigate} />
+        <TitleBar context={context} clock={clock} onNavigate={navigate} onLogout={() => { setLogoutPrompt(true); }} />
         <div className="desktop-body">
           <Sidebar
             activeRoute={route}
@@ -905,6 +923,21 @@ const App = () => {
           </section>
         </div>
         <StatusBar context={context} />
+        {logoutPrompt && (
+          <Dialog label="Log out of Orix" onClose={() => { if (!loggingOut) setLogoutPrompt(false); }}>
+            <section className="modal small">
+              <header><h2>Log out of Orix?</h2></header>
+              <div className="user-editor-body">
+                <p>Save any unfinished forms before logging out. You can then sign in with another account.</p>
+                <p>The counter and business day keep their current status.</p>
+              </div>
+              <footer>
+                <button disabled={loggingOut} onClick={() => { setLogoutPrompt(false); }}>Stay signed in</button>
+                <button className="primary" disabled={loggingOut} onClick={() => { void logout(); }}>{loggingOut ? "Logging out…" : "Log out"}</button>
+              </footer>
+            </section>
+          </Dialog>
+        )}
         {toast === null ? null : <Toast toast={toast} />}
       </main>
     </ErrorBoundary>
@@ -2876,7 +2909,6 @@ const PosModule = ({
       } else {
         const message = posSaleErrorMessage(response.error.message, response.error.fields);
         setLastSaleError(message);
-        showToast(message, "error");
       }
     } catch {
       setLastSaleError(
@@ -2894,7 +2926,6 @@ const PosModule = ({
     const blockingMessage = posBlockingMessage(form, totals.totalMinor);
     if (blockingMessage !== null) {
       setLastSaleError(blockingMessage);
-      showToast(blockingMessage, "error");
       return;
     }
     saleInFlight.current = true;
@@ -2913,7 +2944,6 @@ const PosModule = ({
       } else {
         const message = posSaleErrorMessage(response.error.message, response.error.fields);
         setLastSaleError(message);
-        showToast(message, "error");
       }
     } catch {
       setLastSaleError(
@@ -3603,7 +3633,7 @@ const ReceiptPreview = ({
       <section className="modal receipt-modal">
         <header>
           <div>
-            <p className="eyebrow">Sale completed</p>
+            <p className="eyebrow">{receipt.returnedMinor ? "Updated after returns" : "Sale completed"}</p>
             <h2>Receipt Preview</h2>
           </div>
           <button className="icon-button" aria-label="Close receipt" onClick={onClose}>
@@ -3634,6 +3664,9 @@ const ReceiptPreview = ({
             <ReceiptDetail label="Cashier" value={receipt.cashierName} />
             <ReceiptDetail label="Customer" value={receipt.customerName} />
           </div>
+          {Boolean(receipt.returnedMinor) && (
+            <p>{receipt.items.length === 0 ? "Fully returned — no items retained." : "Updated receipt — retained items only. Line totals include allocated discounts and tax."}</p>
+          )}
           <table className="receipt-table">
             <thead>
               <tr>
@@ -3655,11 +3688,21 @@ const ReceiptPreview = ({
             </tbody>
           </table>
           <div className="receipt-totals">
-            <ReceiptDetail label="Subtotal" value={money(receipt.subtotalMinor)} />
-            <ReceiptDetail label="Discount" value={money(receipt.discountMinor)} />
+            {receipt.returnedMinor ? (
+              <>
+                <ReceiptDetail label="Original sale total" value={money(receipt.originalTotalMinor ?? 0)} />
+                <ReceiptDetail label="Returned items" value={money(receipt.returnedMinor)} />
+                <ReceiptDetail label="Cash refunded" value={money(receipt.cashRefundMinor ?? 0)} />
+              </>
+            ) : (
+              <>
+                <ReceiptDetail label="Subtotal" value={money(receipt.subtotalMinor)} />
+                <ReceiptDetail label="Discount" value={money(receipt.discountMinor)} />
+              </>
+            )}
             <ReceiptDetail label="Total" value={money(receipt.totalMinor)} strong />
-            <ReceiptDetail label="Paid" value={money(receipt.paidMinor)} />
-            <ReceiptDetail label="Change" value={money(receipt.changeDueMinor)} />
+            <ReceiptDetail label={receipt.returnedMinor ? "Payment retained" : "Paid"} value={money(receipt.paidMinor)} />
+            {!receipt.returnedMinor && <ReceiptDetail label="Change" value={money(receipt.changeDueMinor)} />}
             <ReceiptDetail label="Payment" value={displayLabel(receipt.paymentType)} />
           </div>
           <div className="receipt-center receipt-footer">
@@ -3718,6 +3761,15 @@ const SalesModule = ({
   readonly settings: AppSettingsDto | null;
   readonly showToast: (message: string, tone?: ToastState["tone"]) => void;
 }) => {
+  const [period, setPeriod] = useState<SalesPeriod>("today");
+  const [fromDate, setFromDate] = useState(localDateInput());
+  const [toDate, setToDate] = useState(localDateInput());
+  const [calendarDay, setCalendarDay] = useState(localDateInput());
+  useEffect(() => {
+    const timer = window.setInterval(() => { setCalendarDay(localDateInput()); }, 1000);
+    return () => { window.clearInterval(timer); };
+  }, []);
+  const range = salesPeriodRange(period, fromDate, toDate);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const listRequest = useRef(0);
@@ -3745,8 +3797,14 @@ const SalesModule = ({
     const request = ++listRequest.current;
     setLoading(true);
     setError(null);
+    if (range.error) {
+      setSales([]);
+      setTotalItems(0);
+      setLoading(false);
+      return;
+    }
     try {
-      const response = await window.orix.sales.list(query);
+      const response = await window.orix.sales.list({ ...query, ...(range.dateFrom ? { dateFrom: range.dateFrom } : {}), ...(range.dateBefore ? { dateBefore: range.dateBefore } : {}) });
       if (request !== listRequest.current) return;
       if (response.ok) {
         setSales(response.value.items);
@@ -3765,7 +3823,7 @@ const SalesModule = ({
     } finally {
       if (request === listRequest.current) setLoading(false);
     }
-  }, [query]);
+  }, [query, range.dateFrom, range.dateBefore, range.error, calendarDay]);
 
   useEffect(() => {
     void loadSales();
@@ -3851,7 +3909,9 @@ const SalesModule = ({
       const response = await window.orix.sales.returnSale(payload);
       if (response.ok) {
         setReturnForm(null);
-        showToast(`Return ${response.value.return.returnNumber} posted.`);
+        showToast(response.value.return.cashRefundMinor > 0
+          ? `Return saved. Give the customer ${money(response.value.return.cashRefundMinor)}. This has been deducted from drawer cash.`
+          : "Return saved. The customer’s outstanding balance has been reduced.");
         await loadSales();
         await loadDetail(returnForm.sale.id);
       } else {
@@ -3878,7 +3938,20 @@ const SalesModule = ({
           Refresh
         </button>
       </div>
-      <div className="filters customer-filters">
+      <div className="filters sales-history-filters">
+        <label>Period
+          <select aria-label="Sales period" value={period} onChange={(event) => {
+            setPeriod(event.target.value as SalesPeriod);
+            setQuery({ ...query, page: 1 });
+          }}>
+            <option value="today">Today</option>
+            <option value="yesterday">Yesterday</option>
+            <option value="week">Last 7 days</option>
+            <option value="custom">Custom range</option>
+            <option value="all">All time</option>
+          </select>
+        </label>
+        <label className="sales-history-search">Search
         <input
           aria-label="Search sales"
           placeholder="Search invoice or customer"
@@ -3887,7 +3960,8 @@ const SalesModule = ({
             setQuery({ ...query, search: event.target.value, page: 1 });
           }}
         />
-        <select
+        </label>
+        <label>Status<select
           aria-label="Sale status"
           value={query.status}
           onChange={(event) => {
@@ -3903,8 +3977,13 @@ const SalesModule = ({
           <option value="draft">Draft</option>
           <option value="completed">Completed</option>
           <option value="cancelled">Cancelled</option>
-        </select>
+        </select></label>
       </div>
+      {period === "custom" && <div className="sales-history-dates">
+        <label>From<input type="date" value={fromDate} aria-invalid={Boolean(range.error)} onChange={(event) => { setFromDate(event.target.value); setQuery({ ...query, page: 1 }); }} /></label>
+        <label>To<input type="date" value={toDate} aria-invalid={Boolean(range.error)} onChange={(event) => { setToDate(event.target.value); setQuery({ ...query, page: 1 }); }} /></label>
+      </div>}
+      <p className="muted" aria-live="polite">{range.error ?? range.label}</p>
       {error !== null ? <p role="alert">{error}</p> : null}
       <div className="table-wrap customer-table" aria-busy={loading}>
         <table>
@@ -3912,7 +3991,7 @@ const SalesModule = ({
             <tr>
               <th>Invoice / customer</th>
               <th>Date</th>
-              <th>Sale total</th>
+              <th>Net sale total</th>
               <th>Status</th>
               <th>Actions</th>
             </tr>
@@ -3951,8 +4030,8 @@ const SalesModule = ({
                     {new Date(sale.saleDate).toLocaleDateString("en-PK")}
                   </td>
                   <td className="sale-value">
-                    <span className="sales-mobile-label">Sale total</span>
-                    <strong>{money(sale.totalMinor)}</strong>
+                    <span className="sales-mobile-label">Net sale total</span>
+                    <strong>{money(sale.netTotalMinor)}</strong>
                   </td>
                   <td>
                     <span
@@ -4169,8 +4248,10 @@ const SaleReturnDialog = ({
             </label>
           </div>
           <p className="return-help">
-            Refund includes the original discounts and tax. Enter only the quantity being returned
-            now.
+            Refund includes the original discounts and tax. Enter only the quantity being returned now.
+            {form.refundMethod === "cash"
+              ? ` Give the customer ${money(totalMinor)} when you post this return. Drawer cash is reduced automatically.`
+              : " This reduces the customer’s outstanding balance; no cash leaves the drawer."}
           </p>
           <div className="return-lines">
             {form.sale.items.map((item) => {
@@ -8643,10 +8724,12 @@ const InventoryDrawer = ({
 const TitleBar = ({
   context,
   clock,
-  onNavigate
+  onNavigate,
+  onLogout
 }: {
   readonly context: AppContextDto | null;
   readonly clock: Date;
+  readonly onLogout: () => void;
   readonly onNavigate: (route: RouteId) => void;
 }) => (
   <header className="title-bar">
@@ -8672,6 +8755,7 @@ const TitleBar = ({
         <Icon name="settings" />
         <span>Settings</span>
       </button>
+      <button onClick={onLogout}>Log out</button>
     </div>
   </header>
 );
@@ -8940,6 +9024,7 @@ const SettingsPage = ({
       backupLocation: ""
     }
   );
+  const [backupRevision, setBackupRevision] = useState(0);
   const [activeTab, setActiveTab] = useState("store");
   const tabsId = useId();
   const [saving, setSaving] = useState(false);
@@ -8994,7 +9079,7 @@ const SettingsPage = ({
       const response = await window.orix.settings.save(draft);
       if (response.ok) {
         onSaved(response.value);
-        setFeedback("Settings saved.");
+        showToast("Settings saved.");
       } else setFeedback(response.error.message);
     } catch {
       setFeedback("Settings could not be saved. Please try again.");
@@ -9157,10 +9242,12 @@ const SettingsPage = ({
           hidden={activeTab !== "data"}
         >
           <SettingsPanel title="Database">
-            <LegacyStockImportTool canManage={canManageMigration} showToast={showToast} />
+            <SqlImport canManage={canManageMigration} showToast={showToast} onBackupChange={() => { setBackupRevision(value => value + 1); }} />
+            {canManageMigration && <ResetStoreData />}
           </SettingsPanel>
           <SettingsPanel title="Backup">
             <BackupTool
+              refreshRevision={backupRevision}
               canManage={canManageMigration}
               settings={draft}
               onSettingsSaved={(savedSettings) => {
@@ -9204,11 +9291,13 @@ const SettingsPage = ({
 };
 
 const BackupTool = ({
+  refreshRevision,
   canManage,
   settings,
   onSettingsSaved,
   showToast
 }: {
+  readonly refreshRevision: number;
   readonly canManage: boolean;
   readonly settings: AppSettingsDto;
   readonly onSettingsSaved: (settings: AppSettingsDto) => void;
@@ -9234,7 +9323,7 @@ const BackupTool = ({
 
   useEffect(() => {
     void loadStatus();
-  }, [loadStatus]);
+  }, [loadStatus, refreshRevision]);
 
   const backupLocationLabel =
     status?.backupLocation ??
@@ -9420,253 +9509,6 @@ const formatFileSize = (size: number): string => {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 };
 
-const LegacyStockImportTool = ({
-  canManage,
-  showToast
-}: {
-  readonly canManage: boolean;
-  readonly showToast: (message: string, tone?: ToastState["tone"]) => void;
-}) => {
-  const [itemsFile, setItemsFile] = useState("");
-  const [sqlFile, setSqlFile] = useState("");
-  const [selectedFiles, setSelectedFiles] = useState<readonly string[]>([]);
-  const [preview, setPreview] = useState<LegacyStockImportPreviewDto | null>(null);
-  const [result, setResult] = useState<LegacyStockImportResultDto | null>(null);
-  const [busy, setBusy] = useState<"select" | "preview" | "import" | null>(null);
-
-  const chooseFiles = async () => {
-    setBusy("select");
-    setResult(null);
-    const response = await window.orix.migration.selectLegacyStockFiles();
-    setBusy(null);
-    if (!response.ok) {
-      showToast(response.error.message, "error");
-      return;
-    }
-    setSelectedFiles(response.value.selectedFiles);
-    if (response.value.itemsFile !== null) setItemsFile(response.value.itemsFile);
-    if (response.value.sqlFile !== null) setSqlFile(response.value.sqlFile);
-    setPreview(null);
-    if (response.value.itemsFile === null) {
-      showToast("No product list file was detected. Select the export files again.", "error");
-      return;
-    }
-    if (response.value.sqlFile === null) {
-      showToast("Product file found. Stock data file is still needed for quantities.", "error");
-      return;
-    }
-    showToast("Files detected. Preview the import before continuing.");
-  };
-
-  const runPreview = async () => {
-    if (itemsFile.trim() === "") {
-      showToast("Select the previous software items file first.", "error");
-      return;
-    }
-    setBusy("preview");
-    setResult(null);
-    const response = await window.orix.migration.previewLegacyStock({
-      itemsFile: itemsFile.trim(),
-      ...(sqlFile.trim() === "" ? {} : { sqlFile: sqlFile.trim() })
-    });
-    setBusy(null);
-    if (response.ok) {
-      setPreview(response.value);
-      showToast(
-        sqlFile.trim() === ""
-          ? "Product preview ready. Select the old stock or backup file before importing."
-          : "Migration preview ready."
-      );
-    } else {
-      showToast(response.error.message, "error");
-    }
-  };
-
-  const runImport = async () => {
-    if (itemsFile.trim() === "") {
-      showToast("Select the old software product list before importing.", "error");
-      return;
-    }
-    if (sqlFile.trim() === "") {
-      showToast(
-        "Select the old software stock or backup file so quantities can be imported.",
-        "error"
-      );
-      return;
-    }
-    const backupStatus = await window.orix.backups.status();
-    if (!backupStatus.ok || backupStatus.value.lastBackup?.status !== "completed") {
-      showToast("Create a verified backup before importing stock.", "error");
-      return;
-    }
-    setBusy("import");
-    const response = await window.orix.migration.importLegacyStock({
-      itemsFile: itemsFile.trim(),
-      sqlFile: sqlFile.trim(),
-      mode: "valid-only"
-    });
-    setBusy(null);
-    if (response.ok) {
-      setResult(response.value);
-      showToast(`Imported ${String(response.value.createdProducts)} products.`);
-    } else {
-      showToast(response.error.message, "error");
-    }
-  };
-
-  const issueCounts = countMigrationIssues(preview?.issues ?? []);
-  const blockingCount = issueCounts.error;
-  const warningCount = issueCounts.warning;
-
-  if (!canManage) {
-    return (
-      <EmptyState title="Migration locked" description="Only owners can import external data." />
-    );
-  }
-
-  return (
-    <div className="migration-tool">
-      <div className="migration-intro">
-        <strong>Import from previous software</strong>
-        <span>
-          Select all export or backup files from the old software at once. Orix will detect the
-          product list and stock quantities automatically.
-        </span>
-      </div>
-      <div className="migration-steps">
-        <div className={`migration-step ${selectedFiles.length > 0 ? "complete" : ""}`}>
-          <span>1</span>
-          <strong>Choose old software files</strong>
-          <small>
-            {selectedFiles.length === 0
-              ? "No files selected"
-              : `${String(selectedFiles.length)} files selected`}
-          </small>
-        </div>
-        <div className={`migration-step ${preview !== null ? "complete" : ""}`}>
-          <span>2</span>
-          <strong>Preview detected data</strong>
-          <small>Review products, stock, and problems before import</small>
-        </div>
-        <div className={`migration-step ${result !== null ? "complete" : ""}`}>
-          <span>3</span>
-          <strong>Import ready items</strong>
-          <small>Clean rows become products and opening stock</small>
-        </div>
-      </div>
-      <div className="migration-actions">
-        <button onClick={() => void chooseFiles()} disabled={busy !== null}>
-          <Icon name="folder" />
-          Select old software files
-        </button>
-        <button
-          onClick={() => void runPreview()}
-          disabled={busy !== null || itemsFile === ""}
-          title={itemsFile === "" ? "Select files first" : "Preview import"}
-        >
-          <Icon name="search" />
-          Preview
-        </button>
-        <button
-          className="primary"
-          onClick={() => void runImport()}
-          disabled={busy !== null || preview === null || sqlFile === ""}
-          title={
-            sqlFile === "" ? "Stock data file is required before import" : "Import ready items"
-          }
-        >
-          <Icon name="upload" />
-          Import ready items
-        </button>
-      </div>
-      <div className="migration-detection">
-        <div className={itemsFile === "" ? "missing" : "found"}>
-          <strong>Product list</strong>
-          <span>{itemsFile === "" ? "Not detected yet" : "Detected"}</span>
-        </div>
-        <div className={sqlFile === "" ? "missing" : "found"}>
-          <strong>Stock quantities</strong>
-          <span>{sqlFile === "" ? "Not detected yet" : "Detected"}</span>
-        </div>
-      </div>
-      {itemsFile !== "" && sqlFile === "" ? (
-        <p className="field-error">
-          Products can be previewed, but stock quantities cannot be imported until the old stock or
-          backup file is selected.
-        </p>
-      ) : null}
-      {selectedFiles.length > 0 ? (
-        <details className="migration-files">
-          <summary>Selected files</summary>
-          {selectedFiles.map((filePath) => (
-            <span key={filePath}>{filePath}</span>
-          ))}
-        </details>
-      ) : null}
-      {busy !== null ? <p className="muted-text">Working on import...</p> : null}
-      {preview === null ? (
-        <EmptyState
-          title="Previous software import"
-          description="Start by selecting all export files from the old system. Orix will tell you what it can import."
-        />
-      ) : (
-        <div className="migration-preview">
-          <div className="migration-store">
-            <strong>{preview.store.company ?? "Previous software store"}</strong>
-            <span>{preview.store.address ?? "No address found"}</span>
-            <span>{preview.store.phone ?? "No phone found"}</span>
-          </div>
-          <div className="migration-metrics">
-            <Metric label="Active Items" value={String(preview.totals.activeItems)} />
-            <Metric label="With Stock" value={String(preview.totals.productsWithPositiveStock)} />
-            <Metric
-              label="Negative Stock"
-              value={String(preview.totals.productsWithNegativeStock)}
-            />
-            <Metric label="Duplicate Barcodes" value={String(preview.totals.duplicateBarcodes)} />
-          </div>
-          <p className="muted-text">
-            {blockingCount} blocking issues and {warningCount} warnings found. Import keeps the old
-            system's current stock where data is clean and skips blocked products for review.
-          </p>
-          <div className="migration-sample">
-            {preview.sampleProducts.slice(0, 6).map((product) => (
-              <div className="migration-sample-row" key={product.sourceItemId}>
-                <span>
-                  <strong>{product.name}</strong>
-                  <small>{product.barcode ?? "No barcode"}</small>
-                </span>
-                <span>{money(product.salePriceMinor)}</span>
-                <span>Stock {product.openingStock}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-      {result !== null ? (
-        <div className="migration-result">
-          <strong>Import complete</strong>
-          <span>{result.createdProducts} products created</span>
-          <span>{result.openingStockTransactions} opening stock transactions posted</span>
-          <span>{result.skippedProducts.length} products skipped for review</span>
-        </div>
-      ) : null}
-    </div>
-  );
-};
-
-const countMigrationIssues = (
-  issues: readonly MigrationIssueDto[]
-): { readonly error: number; readonly warning: number; readonly info: number } =>
-  issues.reduce(
-    (counts, issue) => ({
-      error: counts.error + (issue.severity === "error" ? 1 : 0),
-      warning: counts.warning + (issue.severity === "warning" ? 1 : 0),
-      info: counts.info + (issue.severity === "info" ? 1 : 0)
-    }),
-    { error: 0, warning: 0, info: 0 }
-  );
-
 const UserManagement = ({
   canManage,
   showToast
@@ -9725,24 +9567,8 @@ const UserManagement = ({
 
   return (
     <div className="user-management">
-      <div className="toolbar compact-toolbar">
-        <input
-          placeholder="Search users"
-          value={search}
-          onChange={(event) => {
-            setSearch(event.target.value);
-          }}
-        />
-        <select
-          value={status}
-          onChange={(event) => {
-            setStatus(event.target.value as typeof status);
-          }}
-        >
-          <option value="all">All</option>
-          <option value="active">Active</option>
-          <option value="disabled">Disabled</option>
-        </select>
+      <div className="users-heading">
+        <p>Manage who can sign in and what they can access in this store.</p>
         <button
           className="primary"
           disabled={!canManage}
@@ -9758,23 +9584,42 @@ const UserManagement = ({
             });
           }}
         >
-          New User
+          <Icon name="plus" />
+          New user
         </button>
+      </div>
+      <div className="users-filters">
+        <label>
+          Search users
+          <input placeholder="Name or username" value={search} onChange={(event) => { setSearch(event.target.value); }} />
+        </label>
+        <label>
+          Account status
+          <select value={status} onChange={(event) => { setStatus(event.target.value as typeof status); }}>
+            <option value="all">All statuses</option>
+            <option value="active">Active</option>
+            <option value="disabled">Disabled</option>
+          </select>
+        </label>
       </div>
       {loading ? (
         <LoadingState label="Loading users" />
+      ) : users.length === 0 ? (
+        <EmptyState title="No users found" description="Try another name or change the account status filter." />
       ) : (
-        <div className="user-list">
+        <div className="user-list" aria-label="Store users">
           {users.map((user) => (
             <div className="user-row" key={user.id}>
-              <div>
+              <div className="user-identity">
                 <strong>{user.fullName}</strong>
                 <span>{user.username}</span>
               </div>
-              <span className={`pill ${user.status === "active" ? "success" : "muted"}`}>
-                {displayLabel(user.status)}
-              </span>
-              <span>{user.roleNames.join(", ")}</span>
+              <div className="user-access">
+                <span className="user-role">{user.roleNames.join(", ")}</span>
+                <span className={`pill ${user.status === "active" ? "success" : "muted"}`}>
+                  {displayLabel(user.status)}
+                </span>
+              </div>
               <button
                 disabled={!canManage}
                 onClick={() => {
@@ -9789,16 +9634,17 @@ const UserManagement = ({
                     status: user.status
                   });
                 }}
+                aria-label={`Edit ${user.fullName}`}
               >
-                Edit
+                Edit user
               </button>
             </div>
           ))}
         </div>
       )}
       {form === null ? null : (
-        <div className="modal-backdrop">
-          <section className="modal">
+        <Dialog label={form.id === undefined ? "New user" : "Edit user"} onClose={() => { setSubmitted(false); setForm(null); }}>
+          <section className="modal user-editor">
             <header>
               <h2>{form.id === undefined ? "Create User" : "Edit User"}</h2>
               <button
@@ -9810,6 +9656,8 @@ const UserManagement = ({
                 Close
               </button>
             </header>
+            <div className="user-editor-body">
+            <p className="muted">{form.id === undefined ? "Create a separate login for each person using the counter." : "Leave the new password and PIN empty to keep the current ones."}</p>
             <div className="form-grid">
               <Field
                 label="Full Name *"
@@ -9862,7 +9710,8 @@ const UserManagement = ({
                   <option value="disabled">Disabled</option>
                 </select>
               </label>
-              <div className="role-picker wide">
+              <fieldset className="role-picker wide">
+                <legend>Access roles</legend>
                 {roleOptions.map((role) => (
                   <label className="check-row" key={role}>
                     <input
@@ -9881,7 +9730,8 @@ const UserManagement = ({
                 {userErrors.roleNames === undefined ? null : (
                   <small className="field-error">{userErrors.roleNames}</small>
                 )}
-              </div>
+              </fieldset>
+            </div>
             </div>
             <footer>
               <button
@@ -9903,7 +9753,7 @@ const UserManagement = ({
               </button>
             </footer>
           </section>
-        </div>
+        </Dialog>
       )}
     </div>
   );

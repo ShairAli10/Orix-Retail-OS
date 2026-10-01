@@ -58,3 +58,9 @@ This schema upgrade follows the existing pre-migration snapshot procedure. Older
 ## Current installation checklist
 
 Use [the Windows rollout checklist](windows-rollout-checklist.md) for clean installation, updates, recovery testing and store-owner signoff. The latest local evidence is in [single-counter acceptance](single-counter-acceptance-2026-09-29.md).
+
+## Accidentally closed today's counter
+
+An owner can go to **Counter & Expenses → Closed by mistake?**, enter a reason and choose **Reopen counter**. This resumes the existing cash session and business day; it does not create a second opening float or alter sales, payments, expenses or stock. Keep the original drawer cash in place before resuming. Enter a fresh counted cash amount when closing again.
+
+The earlier closing count, variance, timestamp and explanation remain in the audit history, together with the owner and reason for reopening. Only the store's current local business date can be reopened. Cashiers cannot perform this action. Stale or repeated requests are rejected; refresh the counter screen if a response is interrupted. A failed audit write rolls back the reopen.

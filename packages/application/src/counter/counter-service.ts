@@ -29,6 +29,26 @@ export class CounterService {
       return Promise.resolve(this.summary(actor));
     });
   }
+  public reopen(
+    actor: CounterActor,
+    sessionId: string,
+    closedAt: string,
+    reason: string
+  ): Promise<CoreResult<CounterSummary>> {
+    return this.context.transactionRunner.run({ name: "counter.reopen" }, () => {
+      if (typeof reason !== "string" || reason.trim().length < 3 || reason.length > 500)
+        return Promise.resolve(failure("Enter a reason for reopening (3–500 characters)."));
+      const session = this.context.repositories.counter.session(actor.businessDayId);
+      if (
+        session?.id !== sessionId ||
+        session.status !== "closed" ||
+        session.closedAt !== closedAt
+      )
+        return Promise.resolve(failure("The counter has changed. Refresh before reopening."));
+      this.context.repositories.counter.reopen(actor, session, reason.trim());
+      return Promise.resolve(this.summary(actor));
+    });
+  }
   public close(
     actor: CounterActor,
     countedCashMinor: number,

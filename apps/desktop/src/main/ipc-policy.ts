@@ -8,6 +8,7 @@ export const channelPermissions: Readonly<Record<string, PermissionCode | "sessi
   "diagnostics.report": "public",
   "counter.summary": "expenses.view",
   "counter.open": "pos.view",
+  "counter.reopen": "pos.view",
   "counter.close": "pos.view",
   "counter.expense": "expenses.manage",
   "auth.status": "public",
@@ -80,6 +81,8 @@ export const channelPermissions: Readonly<Record<string, PermissionCode | "sessi
   "backups.select-file": "settings.manage",
   "backups.verify": "settings.manage",
   "backups.restore": "settings.manage",
+  "store.reset-data": "settings.manage",
+  "migration.legacy-stock.last-result": "settings.manage",
   "migration.legacy-stock.import": "settings.manage",
   "migration.legacy-stock.preview": "settings.manage",
   "migration.legacy-stock.select-files": "settings.manage"

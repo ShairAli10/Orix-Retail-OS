@@ -202,6 +202,7 @@ export type MigrationIssueDto = {
 
 export type LegacyStockImportProductDto = {
   readonly sourceItemId: string;
+  readonly sourceErrors?: readonly string[];
   readonly name: string;
   readonly categoryName: string;
   readonly unitName: string;
@@ -214,70 +215,59 @@ export type LegacyStockImportProductDto = {
   readonly archived: boolean;
 };
 
+export type SqlContactCandidate = {
+  readonly sourceId: string;
+  readonly kind: "customer" | "supplier";
+  readonly name: string;
+  readonly phone: string;
+  readonly email: string;
+  readonly address: string;
+  readonly city: string;
+};
+
 export type LegacyStockImportPreviewDto = {
+  readonly sourceName: string;
+  readonly sourceHash: string;
+  readonly sourceTimezone: string | null;
+  readonly storeTimezone: string;
   readonly generatedAt: string;
-  readonly source: {
-    readonly itemsFile: string;
-    readonly sqlFile: string | null;
-  };
-  readonly store: {
-    readonly company: string | null;
-    readonly address: string | null;
-    readonly phone: string | null;
-    readonly email: string | null;
-    readonly currencyCode: string | null;
-  };
-  readonly totals: {
-    readonly itemRows: number;
-    readonly activeItems: number;
-    readonly archivedItems: number;
-    readonly importableProducts: number;
-    readonly categories: number;
-    readonly units: number;
-    readonly stockLocations: number;
-    readonly quantityRows: number;
-    readonly productsWithPositiveStock: number;
-    readonly productsWithNegativeStock: number;
-    readonly duplicateBarcodes: number;
-    readonly duplicateNames: number;
-    readonly missingBarcodes: number;
-    readonly zeroCostPrice: number;
-    readonly zeroSalePrice: number;
-  };
-  readonly issues: readonly MigrationIssueDto[];
-  readonly sampleProducts: readonly LegacyStockImportProductDto[];
+  readonly latestSaleAt: string | null;
+  readonly storeName: string;
+  readonly currency: string | null;
+  readonly archivedProducts: number;
+  readonly products: readonly LegacyStockImportProductDto[];
+  readonly contacts: readonly SqlContactCandidate[];
+  readonly blockers: readonly string[];
+  readonly warnings: readonly string[];
 };
 
 export type LegacyStockImportFilesDto = {
   readonly selectedFiles: readonly string[];
-  readonly itemsFile: string | null;
   readonly sqlFile: string | null;
 };
-
-export type LegacyStockImportPreviewPayload = {
-  readonly itemsFile: string;
-  readonly sqlFile?: string;
-};
+export type LegacyStockImportPreviewPayload = { readonly sqlFile: string };
 
 export type LegacyStockImportPayload = {
-  readonly itemsFile: string;
-  readonly sqlFile: string;
-  readonly mode: "valid-only" | "strict";
+  readonly sourceHash: string;
+  readonly products: readonly LegacyStockImportProductDto[];
+  readonly contacts: readonly SqlContactCandidate[];
+  readonly excluded: readonly string[];
+  readonly excludedContacts: readonly string[];
+  readonly acceptedWarnings: boolean;
 };
-
-export type LegacyStockImportSkippedProductDto = {
-  readonly sourceItemId: string;
-  readonly name: string;
-  readonly reason: string;
-};
-
 export type LegacyStockImportResultDto = {
+  readonly id: string;
   readonly importedAt: string;
-  readonly createdCategories: number;
-  readonly createdUnits: number;
+  readonly sourceName: string;
+  readonly sourceHash: string;
+  readonly backupFile: string;
   readonly createdProducts: number;
+  readonly createdCustomers: number;
+  readonly createdSuppliers: number;
   readonly openingStockTransactions: number;
-  readonly skippedProducts: readonly LegacyStockImportSkippedProductDto[];
+  readonly openingQuantity: number;
+  readonly openingCostMinor: number;
+  readonly reportJson: string;
 };
 
 export type MigrationIpcError = {
@@ -991,6 +981,7 @@ export type SaleWritePayload = {
 };
 
 export type SaleListRequest = {
+  readonly dateBefore?: string;
   readonly search?: string;
   readonly customerId?: string;
   readonly status?: SaleStatusFilter;
@@ -1066,6 +1057,9 @@ export type ReceiptLineItemDto = {
 };
 
 export type ReceiptDto = {
+  readonly originalTotalMinor?: number;
+  readonly returnedMinor?: number;
+  readonly cashRefundMinor?: number;
   readonly saleId: string;
   readonly saleNumber: string;
   readonly saleDate: string;
@@ -1488,6 +1482,13 @@ export type LegacyStockImportPreviewContract = IpcContract<
   MigrationIpcError
 >;
 
+export type LegacyStockImportLastContract = IpcContract<
+  "orix:migration.legacy-stock.last-result",
+  Record<string, never>,
+  LegacyStockImportResultDto | null,
+  MigrationIpcError
+>;
+
 export type LegacyStockImportContract = IpcContract<
   "orix:migration.legacy-stock.import",
   LegacyStockImportPayload,
@@ -1860,6 +1861,7 @@ export type OrixIpcContract =
   | SettingsSaveContract
   | LegacyStockImportSelectFilesContract
   | LegacyStockImportPreviewContract
+  | LegacyStockImportLastContract
   | LegacyStockImportContract
   | AuthStatusContract
   | SetupStoreContract
@@ -1922,6 +1924,7 @@ export type OrixIpcContract =
   | ProductCatalogRestoreContract;
 
 export type CounterSummaryDto = {
+  readonly canReopen?: boolean;
   readonly backupWarning?: string;
   readonly session: {
     readonly id: string;
@@ -2005,5 +2008,19 @@ export type DiagnosticsReportContract = IpcContract<
     readonly stack?: string;
   },
   { readonly recorded: boolean },
+  AppIpcError
+>;
+
+export type StoreDataResetContract = IpcContract<
+  "orix:store.reset-data",
+  { readonly confirmation: string; readonly password: string },
+  { readonly backupFile: string },
+  AppIpcError
+>;
+
+export type CounterReopenContract = IpcContract<
+  "orix:counter.reopen",
+  { readonly sessionId: string; readonly closedAt: string; readonly reason: string },
+  CounterSummaryDto,
   AppIpcError
 >;

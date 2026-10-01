@@ -86,6 +86,20 @@ export class CounterRepository {
       reason
     });
   }
+  public reopen(actor: CounterActor, session: CounterSession, reason: string): void {
+    this.audit(actor, "CounterReopened", { reason, previousClosing: session });
+    const result = this.connection.sqlite
+      .prepare(
+        "UPDATE cash_sessions SET status='open',closed_at=NULL,closed_by_user_id=NULL,expected_cash_minor=NULL,counted_cash_minor=NULL,variance_minor=NULL,notes=NULL WHERE id=? AND business_day_id=? AND status='closed' AND closed_at=?"
+      )
+      .run(session.id, actor.businessDayId, session.closedAt);
+    if (result.changes !== 1) throw new Error("Counter changed. Refresh before reopening.");
+    this.connection.sqlite
+      .prepare(
+        "UPDATE business_days SET status='open',closed_at=NULL,closed_by_user_id=NULL,expected_cash_minor=NULL,counted_cash_minor=NULL,cash_variance_minor=NULL WHERE id=?"
+      )
+      .run(actor.businessDayId);
+  }
   public postExpense(
     actor: CounterActor,
     number: string,

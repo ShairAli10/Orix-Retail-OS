@@ -7,6 +7,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./review": {
+      "types": "./dist/ospos/review.d.ts",
+      "default": "./dist/ospos/review.js"
     }
   },
   "scripts": {

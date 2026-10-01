@@ -19,6 +19,9 @@ test("Sales return validates quantity and posts a refund in the isolated store",
       .locator(".sidebar")
       .getByRole("button", { name: "Sales History", exact: true })
       .click();
+    await expect(page.getByLabel("Sales period")).toHaveValue("today");
+    await page.getByLabel("Sales period").selectOption("all");
+    const cashBefore = await page.evaluate(() => window.orix.counter.summary());
     const row = page.locator("tbody tr").filter({ hasText: "SL-000001" });
     await row.getByRole("button", { name: "View details", exact: true }).click();
     await page.getByRole("button", { name: "Return items", exact: true }).click();
@@ -50,6 +53,17 @@ test("Sales return validates quantity and posts a refund in the isolated store",
     await expect(page.locator(".sale-details-drawer tbody tr td").nth(2)).toHaveText("0.5");
     await page.keyboard.press("Escape");
     await expect(row).toContainText("Partially returned");
+    await expect(row.locator(".sale-value > strong")).toHaveText("Rs 75.00");
+    const cashAfter = await page.evaluate(() => window.orix.counter.summary());
+    expect(cashBefore.ok && cashAfter.ok && cashBefore.value.expectedCashMinor - cashAfter.value.expectedCashMinor).toBe(7500);
+    await row.getByRole("button", { name: "View details", exact: true }).click();
+    await page.getByRole("button", { name: "Reprint receipt", exact: true }).click();
+    const receipt = page.getByRole("dialog", { name: "Receipt preview", exact: true });
+    await expect(receipt).toContainText("retained items only");
+    await expect(receipt.locator(".receipt-table tbody tr td").nth(1)).toHaveText("0.5");
+    await expect(receipt.locator(".receipt-table tbody tr td").nth(3)).toHaveText("Rs 75.00");
+    await expect(receipt).toContainText("Cash refunded");
+    await page.keyboard.press("Escape");
     await row.getByRole("button", { name: "View details", exact: true }).click();
     await page.getByRole("button", { name: "Return items", exact: true }).click();
     await quantity.fill("0.5");
@@ -62,7 +76,7 @@ test("Sales return validates quantity and posts a refund in the isolated store",
     await expect(row).toContainText("Fully returned");
     await expect(row.getByRole("button", { name: "Return items", exact: true })).toHaveCount(0);
     await expect(row.locator(".pill")).toHaveText("Fully returned");
-    await expect(row.locator(".sale-value > strong")).toHaveText("Rs 150.00");
+    await expect(row.locator(".sale-value > strong")).toHaveText("Rs 0.00");
     const creditRow = page.locator("tbody tr").filter({ hasText: "SL-000002" });
     await creditRow.getByRole("button", { name: "View details", exact: true }).click();
     await page.getByRole("button", { name: "Return items", exact: true }).click();

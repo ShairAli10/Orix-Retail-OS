@@ -44,6 +44,7 @@ export type OspoMigrationIssue = {
 
 export type OrixProductImportCandidate = {
   readonly sourceItemId: string;
+  readonly sourceErrors?: readonly string[];
   readonly name: string;
   readonly categoryName: string;
   readonly unitName: string;
@@ -84,4 +85,30 @@ export type OspoMigrationPreview = {
   readonly stockLocations: readonly OspoStockLocation[];
   readonly products: readonly OrixProductImportCandidate[];
   readonly sampleProducts: readonly OrixProductImportCandidate[];
+};
+
+export type SqlContactCandidate = {
+  readonly sourceId: string;
+  readonly kind: "customer" | "supplier";
+  readonly name: string;
+  readonly phone: string;
+  readonly email: string;
+  readonly address: string;
+  readonly city: string;
+};
+
+export type SqlImportReview = {
+  readonly sourceName: string;
+  readonly sourceHash: string;
+  readonly sourceTimezone: string | null;
+  readonly storeTimezone: string;
+  readonly generatedAt: string;
+  readonly latestSaleAt: string | null;
+  readonly storeName: string;
+  readonly currency: string | null;
+  readonly archivedProducts: number;
+  readonly products: readonly OrixProductImportCandidate[];
+  readonly contacts: readonly SqlContactCandidate[];
+  readonly blockers: readonly string[];
+  readonly warnings: readonly string[];
 };

@@ -51,6 +51,7 @@ export type SaleListQuery = {
   readonly search?: string;
   readonly customerId?: string;
   readonly status?: SaleStatusFilter;
+  readonly dateBefore?: string;
   readonly dateFrom?: string;
   readonly dateTo?: string;
   readonly page: number;
@@ -174,6 +175,9 @@ export type ReceiptLineItem = {
 };
 
 export type ReceiptModel = {
+  readonly originalTotalMinor?: number;
+  readonly returnedMinor?: number;
+  readonly cashRefundMinor?: number;
   readonly saleId: string;
   readonly saleNumber: string;
   readonly saleDate: string;
@@ -733,7 +737,16 @@ export class SaleRepository extends BaseRepository<typeof sales> {
     if (sale.value === undefined) {
       return err(repositoryError("REPOSITORY_NOT_FOUND", "Sale was not found"));
     }
+    const adjusted = sale.value.returnStatus !== "none";
+    const cashRefundMinor = this.money(
+      "SELECT COALESCE(SUM(cash_refund_minor),0) AS amount FROM sales_returns WHERE original_sale_id=? AND status='posted'",
+      saleId
+    );
+    const document = sale.value;
     return ok({
+      originalTotalMinor: document.totalMinor,
+      returnedMinor: document.refundedMinor,
+      cashRefundMinor,
       saleId: sale.value.id,
       saleNumber: sale.value.saleNumber,
       saleDate: sale.value.completedAt ?? sale.value.saleDate,
@@ -741,16 +754,25 @@ export class SaleRepository extends BaseRepository<typeof sales> {
       customerName: sale.value.customerName ?? "Walk-in Customer",
       subtotalMinor: sale.value.subtotalMinor,
       discountMinor: sale.value.discountMinor,
-      totalMinor: sale.value.totalMinor,
-      paidMinor: sale.value.paidMinor,
-      changeDueMinor: sale.value.changeDueMinor,
+      totalMinor: document.netTotalMinor,
+      paidMinor: document.paidMinor - cashRefundMinor,
+      changeDueMinor: adjusted ? 0 : document.changeDueMinor,
       paymentType: sale.value.paymentType,
-      items: sale.value.items.map((item) => ({
-        name: item.productName,
-        quantity: item.quantity,
-        unitPriceMinor: item.unitPriceMinor,
-        lineTotalMinor: item.lineTotalMinor
-      }))
+      items: document.items
+        .filter((item) => item.quantity > item.returnedQuantity)
+        .map((item) => ({
+          name: item.productName,
+          quantity: item.quantity - item.returnedQuantity,
+          unitPriceMinor: item.unitPriceMinor,
+          lineTotalMinor: adjusted
+            ? refundForQuantity(
+                document.totalMinor,
+                document.items,
+                item.id,
+                item.quantity - item.returnedQuantity
+              )
+            : item.lineTotalMinor
+        }))
     });
   }
 
@@ -1213,6 +1235,10 @@ export class SaleRepository extends BaseRepository<typeof sales> {
     if (query.dateTo !== undefined && query.dateTo.length > 0) {
       clauses.push("s.sale_date <= ?");
       params.push(query.dateTo);
+    }
+    if (query.dateBefore) {
+      clauses.push("s.sale_date < ?");
+      params.push(query.dateBefore);
     }
     const search = query.search?.trim().toLowerCase();
     if (search !== undefined && search.length > 0) {

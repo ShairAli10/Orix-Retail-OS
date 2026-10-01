@@ -19,6 +19,15 @@ test("Sales history filters and keyboard drawer work across window sizes", async
       .locator(".sidebar")
       .getByRole("button", { name: "Sales History", exact: true })
       .click();
+    await expect(page.getByLabel("Sales period")).toHaveValue("today");
+    await page.getByLabel("Sales period").selectOption("all");
+    await page.getByLabel("Sales period").selectOption("custom");
+    await page.getByLabel("From", { exact: true }).fill("2030-01-02");
+    await page.getByLabel("To", { exact: true }).fill("2030-01-01");
+    await expect(page.getByText("Choose valid dates with From on or before To.")).toBeVisible();
+    await page.getByLabel("To", { exact: true }).fill("2030-01-03");
+    await expect(page.locator(".sales-module tbody")).toContainText("No sales");
+    await page.getByLabel("Sales period").selectOption("all");
     const search = page.getByRole("textbox", { name: "Search sales" });
     await search.fill("no-such-invoice");
     await expect(page.getByText("No sales match your filters.")).toBeVisible();

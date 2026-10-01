@@ -189,6 +189,18 @@ test("successive multi-item returns update status, net sales, drawer and stock",
   assert.equal(partial.refundedMinor, first.return.totalRefundMinor);
   assert.equal(partial.netTotalMinor, 2937 - first.return.totalRefundMinor);
   assert.equal(stock(products[0].id), beforeStock[0] + 1);
+  const partialReceipt = await ok("sales.receipt", { saleId: id });
+  assert.equal(partialReceipt.totalMinor, partial.netTotalMinor);
+  assert.equal(partialReceipt.items[0].quantity, 1);
+  assert.equal(
+    partialReceipt.items.reduce((sum, item) => sum + item.lineTotalMinor, 0),
+    partial.netTotalMinor
+  );
+  assert.equal(partialReceipt.cashRefundMinor, first.return.totalRefundMinor);
+  assert.equal(
+    (await ok("counter.summary")).expectedCashMinor,
+    beforeCash - first.return.totalRefundMinor
+  );
   const second = await ok("sales.return", {
     saleId: id,
     reason: "Remaining damaged",
@@ -204,6 +216,10 @@ test("successive multi-item returns update status, net sales, drawer and stock",
   assert.equal(full.returnStatus, "full");
   assert.equal(full.totalMinor, 2937);
   assert.equal(full.netTotalMinor, 0);
+  const fullReceipt = await ok("sales.receipt", { saleId: id });
+  assert.equal(fullReceipt.totalMinor, 0);
+  assert.equal(fullReceipt.items.length, 0);
+  assert.equal(fullReceipt.paidMinor, 0);
   assert.equal(stock(products[1].id), beforeStock[1]);
   assert.equal((await ok("cash-register.summary")).expectedCashMinor, beforeCash - 2937);
   assert.equal((await ok("dashboard.get")).todaySalesMinor, beforeDashboard.todaySalesMinor);
@@ -620,6 +636,65 @@ test("counter opening, expense, variance and closing reconcile with cash", async
 test("closed counter rejects new financial postings", async () => {
   await login();
   assert.equal((await desktop.call("sales.complete", await sale())).ok, false);
+});
+
+test("owner can reopen today's counter without duplicating cash and retains closing evidence", async () => {
+  await login();
+  const before = await ok("counter.summary");
+  const payload = {
+    sessionId: before.session.id,
+    closedAt: before.session.closedAt,
+    reason: "Accidental early closure"
+  };
+  assert.equal((await desktop.call("counter.reopen", { ...payload, reason: "" })).ok, false);
+  await ok("auth.login", { username: "cashier", password: "DemoCashier!2026" });
+  assert.equal((await desktop.call("counter.reopen", payload)).ok, false);
+  await login();
+  const day = db
+    .prepare(
+      "SELECT id,business_date FROM business_days WHERE id=(SELECT business_day_id FROM cash_sessions WHERE id=?)"
+    )
+    .get(payload.sessionId);
+  db.prepare("UPDATE business_days SET business_date='2000-01-01' WHERE id=?").run(day.id);
+  try {
+    assert.equal((await desktop.call("counter.reopen", payload)).ok, false);
+  } finally {
+    // The IPC guard creates today's empty day when the fixture is moved into history.
+    db.prepare(
+      "DELETE FROM business_days WHERE business_date=? AND branch_id=(SELECT branch_id FROM business_days WHERE id=?) AND id<>?"
+    ).run(day.business_date, day.id, day.id);
+    db.prepare("UPDATE business_days SET business_date=? WHERE id=?").run(
+      day.business_date,
+      day.id
+    );
+  }
+  db.exec(
+    "CREATE TRIGGER fail_reopen_audit BEFORE INSERT ON audit_logs WHEN NEW.action='CounterReopened' BEGIN SELECT RAISE(ABORT,'audit failure'); END;"
+  );
+  assert.equal((await desktop.call("counter.reopen", payload)).ok, false);
+  assert.equal((await ok("counter.summary")).session.status, "closed");
+  db.exec("DROP TRIGGER fail_reopen_audit");
+  const sessions = db.prepare("SELECT count(*) AS n FROM cash_sessions").get().n;
+  const reopened = await ok("counter.reopen", payload);
+  assert.equal(reopened.session.status, "open");
+  assert.equal(reopened.session.id, before.session.id);
+  assert.equal(reopened.session.openingCashMinor, before.session.openingCashMinor);
+  assert.equal(reopened.expectedCashMinor, before.expectedCashMinor);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM cash_sessions").get().n, sessions);
+  const audit = JSON.parse(
+    db
+      .prepare(
+        "SELECT metadata_json FROM audit_logs WHERE action='CounterReopened' ORDER BY occurred_at DESC LIMIT 1"
+      )
+      .get().metadata_json
+  );
+  assert.equal(audit.previousClosing.countedCashMinor, before.session.countedCashMinor);
+  assert.equal(audit.previousClosing.closedAt, before.session.closedAt);
+  await ok("counter.close", {
+    countedCashMinor: reopened.expectedCashMinor,
+    reason: "Final closing after reopening"
+  });
+  assert.equal((await desktop.call("counter.reopen", payload)).ok, false);
 });
 
 test("backup verification rejects missing uniqueness constraints", async () => {

@@ -125,6 +125,11 @@ var backupsApi = {
   restore: (payload) => request("orix:backups.restore", payload)
 };
 var migrationApi = {
+  resetStoreData: (payload) => request("orix:store.reset-data", payload),
+  lastImport: () => request(
+    "orix:migration.legacy-stock.last-result",
+    {}
+  ),
   selectLegacyStockFiles: () => request(
     "orix:migration.legacy-stock.select-files",
     {}
@@ -153,6 +158,7 @@ var inventoryApi = {
   )
 };
 var counterApi = {
+  reopen: (payload) => request("orix:counter.reopen", payload),
   summary: () => request("orix:counter.summary", {}),
   open: (payload) => request("orix:counter.open", payload),
   close: (payload) => request("orix:counter.close", payload),

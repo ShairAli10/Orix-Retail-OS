@@ -1,3 +1,5 @@
+import { resetStoreData } from "./store-reset.js";
+import { postLegacyImport, lastLegacyImport, ImportReviewError } from "./legacy-import.js";
 import { createDiagnostics } from "./diagnostics/bootstrap.js";
 import type { Diagnostics } from "./diagnostics/diagnostics.js";
 import { migrateWithSafetyBackup } from "./diagnostics/upgrade.js";
@@ -10,13 +12,14 @@ import { CounterService } from "@orix/application";
 import type {
   CounterOpenContract,
   CounterCloseContract,
+  CounterReopenContract,
   CounterExpenseContract
 } from "@orix/electron";
 import { verifyDatabaseBackup } from "./backup-verification.js";
 import { channelPermissions, SerialOperations, validIpcRequest } from "./ipc-policy.js";
 import { pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CoreError, CoreResult } from "@orix/core";
@@ -30,7 +33,7 @@ import {
   SupplierManagementApplicationService
 } from "@orix/application";
 import { createDatabaseConnection, runMigrations, type DatabaseConnection } from "@orix/database";
-import { createOspoMigrationPreview, type OrixProductImportCandidate } from "@orix/migration";
+import { createSqlReview } from "@orix/migration";
 import type {
   AppContextContract,
   AppIpcError,
@@ -38,6 +41,7 @@ import type {
   BackupCreateContract,
   BackupRecordDto,
   BackupRestoreContract,
+  StoreDataResetContract,
   BackupSelectDirectoryContract,
   BackupSelectFileContract,
   BackupStatusContract,
@@ -85,7 +89,6 @@ import type {
   SettingsSaveContract,
   LegacyStockImportContract,
   LegacyStockImportPreviewContract,
-  LegacyStockImportResultDto,
   LegacyStockImportSelectFilesContract,
   LoginContract,
   LockContract,
@@ -122,7 +125,7 @@ import type {
   SupplierSaveContract,
   SupplierStatementContract
 } from "@orix/electron";
-import { createRepositories, type CatalogItem, type RepositoryFactory } from "@orix/repositories";
+import { createRepositories, type RepositoryFactory } from "@orix/repositories";
 import { err as ipcErr, ok as ipcOk, type Result } from "@orix/shared";
 import type * as Electron from "electron";
 import type { BrowserWindow as BrowserWindowType } from "electron";
@@ -527,7 +530,13 @@ const createMainWindow = (): BrowserWindowType => {
     diagnostics.record("startup-failed");
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  window.webContents.on("will-navigate", (event) => {
+  window.webContents.on("will-navigate", (event, url) => {
+    // Permit reloading this exact bundled page after a reset; block other destinations.
+    try {
+      const target = new URL(url);
+      target.hash = "";
+      if (target.href === new URL("../renderer/index.html", import.meta.url).href) return;
+    } catch { /* Invalid destinations remain blocked. */ }
     event.preventDefault();
   });
   return window;
@@ -1153,8 +1162,16 @@ const registerCounterHandlers = (state: AppState): void => {
     transactionRunner: new SqliteTransactionRunner(state.connection),
     eventPublisher: new PersistedEventPublisher(state.connection)
   });
-  const response = <T>(result: CoreResult<T>): Result<T, AppIpcError> =>
-    result.ok ? appOk(result.value) : appFail(result.error.message);
+  const canReopen = () => {
+    const day = state.connection.sqlite.prepare("SELECT business_date FROM business_days WHERE id=? AND store_id=? AND branch_id=?").get(state.businessDayId,state.storeId,state.branchId) as {business_date:string}|undefined;
+    return can(state,"pos.view") && roleNamesForUser(state.connection,state.userId).includes("Owner") && day?.business_date === businessDate(new Date(),storeProfile(state.connection,state.storeId).timezone);
+  };
+  const response = (result: ReturnType<CounterService["summary"]>) =>
+    result.ok ? appOk({...result.value,canReopen:canReopen()}) : appFail(result.error.message);
+  ipcMain.handle("orix:counter.reopen", async (_event, request: CounterReopenContract["request"]) => {
+    if (!canReopen()) return appFail("Only an owner can reopen today's counter. Earlier trading days remain closed.");
+    return response(await service.reopen(state,request.payload.sessionId,request.payload.closedAt,request.payload.reason));
+  });
   ipcMain.handle("orix:counter.summary", () => response(service.summary(state)));
   ipcMain.handle("orix:counter.open", async (_event, request: CounterOpenContract["request"]) => {
     state.businessDayId = ensureBusinessDay(
@@ -1179,6 +1196,7 @@ const registerCounterHandlers = (state: AppState): void => {
     } catch {
       return appOk({
         ...closed.value,
+        canReopen:canReopen(),
         backupWarning:
           "Counter closed, but the backup failed. Create a backup from Settings before leaving the store."
       });
@@ -2679,313 +2697,106 @@ const registerInventoryHandlers = (state: AppState): void => {
 };
 
 const registerMigrationHandlers = (state: AppState): void => {
+  let selectedSqlFile: string | null = null;
+  ipcMain.handle("orix:store.reset-data", async (_event, request: StoreDataResetContract["request"]): Promise<StoreDataResetContract["response"]> => {
+    if (!can(state, "settings.manage") || !roleNamesForUser(state.connection,state.userId).includes("Owner")) return appFail("Only an owner can reset store data.");
+    const credentials = credentialForUser(state.connection,state.storeId,state.userId);
+    if (!credentials || typeof request.payload.password !== "string" || !verifySecret(request.payload.password,credentials.passwordHash,credentials.passwordSalt)) return appFail("Enter your owner password to reset store data.");
+    if (request.payload.confirmation !== "RESET STORE DATA") return appFail("Type RESET STORE DATA to confirm.");
+    if (state.connection.sqlite.prepare("SELECT 1 FROM cash_sessions WHERE status='open'").get()) return appFail("Close the counter before resetting store data.");
+    try {
+      const result = await resetStoreData(state.connection,state.storeId,state.userId,request.payload.confirmation,() => createVerifiedBackup(state));
+      selectedSqlFile = null;
+      return appOk(result);
+    } catch (error) {
+      diagnostics.record("operation-failed",error);
+      return appFail("Reset could not complete. Store records were kept. Check the backup folder and try again.");
+    }
+  });
   ipcMain.handle(
     "orix:migration.legacy-stock.select-files",
     async (): Promise<LegacyStockImportSelectFilesContract["response"]> => {
-      if (!can(state, "settings.manage")) {
-        return migrationFail("You do not have permission to run migrations.", "MIGRATION_DENIED");
-      }
+      if (!can(state, "settings.manage"))
+        return migrationFail("Only owners can review an import.", "MIGRATION_DENIED");
       const result = await dialog.showOpenDialog({
-        title: "Select legacy stock export files",
-        properties: ["openFile", "multiSelections"],
-        filters: [
-          { name: "Legacy exports", extensions: ["csv", "sql"] },
-          { name: "All files", extensions: ["*"] }
-        ]
+        title: "Choose old POS SQL export",
+        properties: ["openFile"],
+        filters: [{ name: "Previous POS SQL export", extensions: ["sql"] }]
       });
-      if (result.canceled) {
-        return ipcOk({ selectedFiles: [], itemsFile: null, sqlFile: null });
-      }
-      const itemsFile =
-        result.filePaths.find((filePath) => filePath.toLowerCase().includes("items")) ??
-        result.filePaths.find((filePath) => filePath.toLowerCase().endsWith(".csv")) ??
-        null;
-      const sqlFile =
-        result.filePaths.find((filePath) => filePath.toLowerCase().endsWith(".sql")) ?? null;
-      return ipcOk({ selectedFiles: result.filePaths, itemsFile, sqlFile });
+      if (result.canceled) return ipcOk({ selectedFiles: [], sqlFile: null });
+      selectedSqlFile = result.filePaths[0] ?? null;
+      return ipcOk({
+        selectedFiles: selectedSqlFile ? [selectedSqlFile] : [],
+        sqlFile: selectedSqlFile
+      });
     }
   );
-
   ipcMain.handle(
     "orix:migration.legacy-stock.preview",
     async (
       _event,
       request: LegacyStockImportPreviewContract["request"]
     ): Promise<LegacyStockImportPreviewContract["response"]> => {
-      if (!can(state, "settings.manage")) {
+      if (!can(state, "settings.manage"))
+        return migrationFail("Only owners can review an import.", "MIGRATION_DENIED");
+      if (!selectedSqlFile || request.payload.sqlFile !== selectedSqlFile)
         return migrationFail(
-          "You do not have permission to preview migrations.",
-          "MIGRATION_DENIED"
+          "Choose the SQL export using the file picker first.",
+          "MIGRATION_FILE_REQUIRED"
         );
-      }
       try {
-        const preview = await createOspoMigrationPreview({
-          itemsFile: request.payload.itemsFile,
-          ...(request.payload.sqlFile === undefined ? {} : { sqlFile: request.payload.sqlFile }),
-          sampleSize: 12
-        });
-        return ipcOk({
-          generatedAt: preview.generatedAt,
-          source: preview.source,
-          store: preview.store,
-          totals: preview.totals,
-          issues: preview.issues,
-          sampleProducts: preview.sampleProducts
-        });
-      } catch {
-        return migrationFail("Unable to read legacy export files.", "MIGRATION_PREVIEW_FAILED");
+        const info = await stat(selectedSqlFile);
+        if (!info.isFile() || info.size > 64 * 1024 * 1024)
+          return migrationFail("Choose a SQL file smaller than 64 MB.", "MIGRATION_FILE_SIZE");
+        return ipcOk(
+          createSqlReview(await readFile(selectedSqlFile, "utf8"), basename(selectedSqlFile))
+        );
+      } catch (error) {
+        diagnostics.record("operation-failed", error);
+        return migrationFail(
+          "Could not read this POS export. It may be incomplete or contain unsupported data. The store has not been changed.",
+          "MIGRATION_PREVIEW_FAILED"
+        );
       }
     }
   );
-
+  ipcMain.handle("orix:migration.legacy-stock.last-result", () => {
+    if (!can(state, "settings.manage"))
+      return migrationFail("Only owners can view import reports.", "MIGRATION_DENIED");
+    return ipcOk(lastLegacyImport(state));
+  });
   ipcMain.handle(
     "orix:migration.legacy-stock.import",
     async (
       _event,
       request: LegacyStockImportContract["request"]
     ): Promise<LegacyStockImportContract["response"]> => {
-      if (!can(state, "settings.manage")) {
-        return migrationFail("You do not have permission to import data.", "MIGRATION_DENIED");
-      }
+      if (!can(state, "settings.manage"))
+        return migrationFail("Only owners can import data.", "MIGRATION_DENIED");
+      if (!selectedSqlFile)
+        return migrationFail("Choose and review the SQL file first.", "MIGRATION_FILE_REQUIRED");
       try {
-        const preview = await createOspoMigrationPreview({
-          itemsFile: request.payload.itemsFile,
-          sqlFile: request.payload.sqlFile
-        });
-        return ipcOk(await importLegacyProductsAndStock(state, preview, request.payload.mode));
-      } catch {
-        return migrationFail("Unable to import legacy products and inventory.", "MIGRATION_FAILED");
+        const info = await stat(selectedSqlFile);
+        if (!info.isFile() || info.size > 64 * 1024 * 1024)
+          throw new ImportReviewError("Choose a SQL file smaller than 64 MB.");
+        const source = createSqlReview(
+          await readFile(selectedSqlFile, "utf8"),
+          basename(selectedSqlFile)
+        );
+        return ipcOk(
+          await postLegacyImport(state, source, request.payload, () => createVerifiedBackup(state))
+        );
+      } catch (error) {
+        diagnostics.record("operation-failed", error);
+        return migrationFail(
+          error instanceof ImportReviewError
+            ? error.message
+            : "Import could not finish. No partial import was saved. Check the backup folder is available, then try again.",
+          "MIGRATION_IMPORT_FAILED"
+        );
       }
     }
   );
-};
-
-const importLegacyProductsAndStock = async (
-  state: AppState,
-  preview: Awaited<ReturnType<typeof createOspoMigrationPreview>>,
-  mode: "valid-only" | "strict"
-): Promise<LegacyStockImportResultDto> => {
-  const timestamp = new Date().toISOString();
-  const blockingByItemId = blockingIssuesByItemId(preview.issues);
-  const globalBlockingIssues = preview.issues.filter(
-    (issue) => issue.severity === "error" && issue.itemId === undefined
-  );
-  if (mode === "strict" && preview.issues.some((issue) => issue.severity === "error")) {
-    throw new Error("Legacy import preview has blocking errors.");
-  }
-  if (globalBlockingIssues.length > 0) {
-    throw new Error("Legacy import preview is missing required data.");
-  }
-
-  const catalog = state.repositories.productManagement.getCatalog(state.storeId, true);
-  if (!catalog.ok) {
-    throw new Error(catalog.error.message);
-  }
-  const categoryByName = catalogMap(catalog.value.categories);
-  const unitByName = catalogMap(catalog.value.units);
-  const seenNames = new Set<string>();
-  const seenBarcodes = new Set<string>();
-  const skippedProducts: {
-    sourceItemId: string;
-    name: string;
-    reason: string;
-  }[] = [];
-  let createdCategories = 0;
-  let createdUnits = 0;
-  let createdProducts = 0;
-  let openingStockTransactions = 0;
-
-  state.connection.sqlite.prepare("BEGIN IMMEDIATE").run();
-  try {
-    for (const product of preview.products) {
-      const skipReason = migrationSkipReason(
-        state,
-        product,
-        blockingByItemId,
-        seenNames,
-        seenBarcodes
-      );
-      if (skipReason !== null) {
-        skippedProducts.push({
-          sourceItemId: product.sourceItemId,
-          name: product.name,
-          reason: skipReason
-        });
-        continue;
-      }
-
-      const category = ensureCatalogItem(state, categoryByName, "category", product.categoryName);
-      if (category.created) createdCategories += 1;
-      const unit = ensureCatalogItem(state, unitByName, "unit", product.unitName);
-      if (unit.created) createdUnits += 1;
-
-      const productId = randomUUID();
-      const created = state.repositories.productManagement.createProduct({
-        id: productId,
-        storeId: state.storeId,
-        categoryId: category.item.id,
-        brandId: null,
-        unitId: unit.item.id,
-        name: product.name,
-        barcode: product.barcode,
-        description: product.description,
-        purchasePriceMinor: product.purchasePriceMinor,
-        salePriceMinor: product.salePriceMinor,
-        minimumStock: product.minimumStock,
-        active: true,
-        userId: state.userId,
-        timestamp
-      });
-      if (!created.ok) {
-        throw new Error(created.error.message);
-      }
-
-      const openingStock = state.repositories.productManagement.createOpeningStock(
-        productId,
-        {
-          storeId: state.storeId,
-          categoryId: category.item.id,
-          brandId: null,
-          unitId: unit.item.id,
-          name: product.name,
-          barcode: product.barcode,
-          description: product.description,
-          purchasePriceMinor: product.purchasePriceMinor,
-          salePriceMinor: product.salePriceMinor,
-          minimumStock: product.minimumStock,
-          active: true,
-          userId: state.userId,
-          timestamp
-        },
-        product.openingStock,
-        state.branchId,
-        state.businessDayId
-      );
-      if (!openingStock.ok) {
-        throw new Error(openingStock.error.message);
-      }
-
-      createdProducts += 1;
-      if (product.openingStock > 0) openingStockTransactions += 1;
-      seenNames.add(product.name.toLocaleLowerCase());
-      if (product.barcode !== null) seenBarcodes.add(product.barcode);
-    }
-    state.connection.sqlite.prepare("COMMIT").run();
-  } catch (cause) {
-    state.connection.sqlite.prepare("ROLLBACK").run();
-    throw cause;
-  }
-
-  await new PersistedEventPublisher(state.connection).publish({
-    id: randomUUID(),
-    kind: "domain",
-    name: "LegacyStockImported",
-    version: 1,
-    occurredAt: timestamp,
-    payload: {
-      entityId: state.storeId,
-      createdProducts,
-      openingStockTransactions,
-      skippedProducts: skippedProducts.length
-    },
-    metadata: { storeId: state.storeId, actorId: state.userId }
-  });
-
-  return {
-    importedAt: timestamp,
-    createdCategories,
-    createdUnits,
-    createdProducts,
-    openingStockTransactions,
-    skippedProducts
-  };
-};
-
-const blockingIssuesByItemId = (
-  issues: readonly { readonly severity: string; readonly itemId?: string }[]
-): ReadonlyMap<string, string> => {
-  const map = new Map<string, string>();
-  for (const issue of issues) {
-    if (issue.severity === "error" && issue.itemId !== undefined) {
-      map.set(issue.itemId, issue.itemId);
-    }
-  }
-  return map;
-};
-
-const catalogMap = (items: readonly CatalogItem[]): Map<string, CatalogItem> => {
-  const map = new Map<string, CatalogItem>();
-  for (const item of items) {
-    map.set(item.name.toLocaleLowerCase(), item);
-  }
-  return map;
-};
-
-const ensureCatalogItem = (
-  state: AppState,
-  catalog: Map<string, CatalogItem>,
-  kind: "category" | "unit",
-  name: string
-): { readonly item: CatalogItem; readonly created: boolean } => {
-  const key = name.toLocaleLowerCase();
-  const existing = catalog.get(key);
-  if (existing !== undefined) {
-    return { item: existing, created: false };
-  }
-  const payload =
-    kind === "unit"
-      ? {
-          storeId: state.storeId,
-          name,
-          abbreviation: name,
-          userId: state.userId,
-          timestamp: new Date().toISOString()
-        }
-      : {
-          storeId: state.storeId,
-          name,
-          userId: state.userId,
-          timestamp: new Date().toISOString()
-        };
-  const created = state.repositories.productManagement.createCatalogItem(kind, payload);
-  if (!created.ok) {
-    throw new Error(created.error.message);
-  }
-  catalog.set(key, created.value);
-  return { item: created.value, created: true };
-};
-
-const migrationSkipReason = (
-  state: AppState,
-  product: OrixProductImportCandidate,
-  blockingByItemId: ReadonlyMap<string, string>,
-  seenNames: ReadonlySet<string>,
-  seenBarcodes: ReadonlySet<string>
-): string | null => {
-  if (product.archived) return "Source item is archived.";
-  if (blockingByItemId.has(product.sourceItemId))
-    return "Source item has blocking validation errors.";
-  if (product.openingStock < 0) return "Source item has negative stock.";
-  const normalizedName = product.name.toLocaleLowerCase();
-  if (seenNames.has(normalizedName)) return "Duplicate product name in source import.";
-  if (product.barcode !== null && seenBarcodes.has(product.barcode)) {
-    return "Duplicate barcode in source import.";
-  }
-  const existingName = state.repositories.productManagement.productNameExists(
-    state.storeId,
-    product.name
-  );
-  if (!existingName.ok) throw new Error(existingName.error.message);
-  if (existingName.value) return "Product name already exists in Orix.";
-  if (product.barcode !== null) {
-    const existingBarcode = state.repositories.productManagement.barcodeExists(
-      state.storeId,
-      product.barcode
-    );
-    if (!existingBarcode.ok) throw new Error(existingBarcode.error.message);
-    if (existingBarcode.value) return "Barcode already exists in Orix.";
-  }
-  return null;
 };
 
 const can = (state: AppState, permission: PermissionCode): boolean =>

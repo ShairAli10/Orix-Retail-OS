@@ -21,6 +21,7 @@ export const CounterPage = ({
   const [summary, setSummary] = useState<CounterSummaryDto | null>(null);
   const [opening, setOpening] = useState("0");
   const [counted, setCounted] = useState("");
+  const [reopenReason, setReopenReason] = useState("");
   const [reason, setReason] = useState("");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
@@ -52,7 +53,7 @@ export const CounterPage = ({
   useEffect(() => {
     void load();
   }, [load]);
-  const run = async (action: "open" | "close" | "expense") => {
+  const run = async (action: "open" | "close" | "expense" | "reopen") => {
     if (inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
@@ -60,15 +61,21 @@ export const CounterPage = ({
     setMessage("");
     try {
       const result =
-        action === "open"
-          ? await window.orix.counter.open({ openingCashMinor: minor(opening) })
-          : action === "close"
-            ? await window.orix.counter.close({ countedCashMinor: minor(counted), reason })
-            : await window.orix.counter.expense({
-                amountMinor: minor(amount),
-                description,
-                operationId
-              });
+        action === "reopen"
+          ? await window.orix.counter.reopen({
+              sessionId: summary?.session?.id ?? "",
+              closedAt: summary?.session?.closedAt ?? "",
+              reason: reopenReason
+            })
+          : action === "open"
+            ? await window.orix.counter.open({ openingCashMinor: minor(opening) })
+            : action === "close"
+              ? await window.orix.counter.close({ countedCashMinor: minor(counted), reason })
+              : await window.orix.counter.expense({
+                  amountMinor: minor(amount),
+                  description,
+                  operationId
+                });
       if (!result.ok) {
         setError(result.error.message);
         return;
@@ -76,16 +83,23 @@ export const CounterPage = ({
       setSummary(result.value);
       if (result.value.backupWarning) setError(result.value.backupWarning);
       setMessage(
-        action === "expense"
-          ? "Expense recorded."
-          : action === "close"
-            ? "Counter closed. Cash count saved."
-            : "Counter opened. Ready to sell."
+        action === "reopen"
+          ? "Counter reopened. Continue trading with the existing opening float."
+          : action === "expense"
+            ? "Expense recorded."
+            : action === "close"
+              ? "Counter closed. Cash count saved."
+              : "Counter opened. Ready to sell."
       );
       if (action === "expense") {
         setAmount("");
         setDescription("");
         setOperationId(crypto.randomUUID());
+      }
+      if (action === "reopen") {
+        setCounted("");
+        setReason("");
+        setReopenReason("");
       }
       onChanged();
     } catch {
@@ -252,6 +266,38 @@ export const CounterPage = ({
                   <dt>Explanation</dt>
                   <dd>{summary.session.notes ?? "No difference recorded"}</dd>
                 </dl>
+              )}
+              {!open && summary.session && summary.canReopen && (
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void run("reopen");
+                  }}
+                >
+                  <h3>Closed by mistake?</h3>
+                  <p>
+                    Resume today’s counter with the same opening float. The earlier closing count
+                    stays in the audit history. Confirm the drawer cash is still present before
+                    continuing.
+                  </p>
+                  <label>
+                    Reason for reopening
+                    <textarea
+                      required
+                      minLength={3}
+                      maxLength={500}
+                      disabled={busy}
+                      value={reopenReason}
+                      onChange={(event) => {
+                        setReopenReason(event.target.value);
+                      }}
+                      placeholder="For example: closed before the last customer"
+                    />
+                  </label>
+                  <button disabled={busy || reopenReason.trim().length < 3} type="submit">
+                    Reopen counter
+                  </button>
+                </form>
               )}
             </section>
             <section className="card counter-panel">
