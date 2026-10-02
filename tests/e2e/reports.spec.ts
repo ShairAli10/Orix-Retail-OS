@@ -18,6 +18,8 @@ test("Reports applies date filters explicitly and supports responsive keyboard t
     await page.locator(".sidebar").getByRole("button", { name: "Reports", exact: true }).click();
     await expect(page.getByRole("tab", { name: "Daily Sales", exact: true })).toBeVisible();
     await page.getByLabel("From", { exact: true }).fill("2020-01-01");
+    // Cover the seeded sale regardless of the runner and store timezones.
+    await page.getByLabel("To", { exact: true }).fill("2030-01-01");
     await expect(page.getByText("Date changes have not been applied.")).toBeVisible();
     await page.getByRole("button", { name: "Run Reports", exact: true }).click();
     await expect(page.getByText("Date changes have not been applied.")).toHaveCount(0);
