@@ -1,6 +1,6 @@
 {
   "name": "@orix/desktop",
-  "version": "0.1.0-rc.6",
+  "version": "1.0.0",
   "description": "Offline-first desktop retail management system for Windows.",
   "author": {
     "name": "ORIX TECH"
