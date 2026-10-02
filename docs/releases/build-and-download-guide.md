@@ -2,19 +2,19 @@
 
 ## Download the current installer
 
-Version: **0.1.0-rc.6**, built from application commit `5f1a72664f42b910bf2f1127f5b8f21043ce9636`.
+Version: **1.0.0**, built from application commit `75912af7bb690add5418ab945272417d1f2fdb03`.
 
-- [Download the Windows installer directly — no login required](https://github.com/ShairAli10/Orix-Retail-OS/releases/download/v0.1.0-rc.6/Orix-Retail-OS-Setup-0.1.0-rc.6-x64.exe)
-- [Release page and checksums](https://github.com/ShairAli10/Orix-Retail-OS/releases/tag/v0.1.0-rc.6)
-- [Open its successful build](https://github.com/ShairAli10/Orix-Retail-OS/actions/runs/36992437005)
+- [Download the Windows installer directly — no login required](https://github.com/ShairAli10/Orix-Retail-OS/releases/download/v1.0.0/Orix-Retail-OS-Setup-1.0.0-x64.exe)
+- [Release page and checksums](https://github.com/ShairAli10/Orix-Retail-OS/releases/tag/v1.0.0)
+- [Open its successful build](https://github.com/ShairAli10/Orix-Retail-OS/actions/runs/36997600684)
 
 The public release link downloads the EXE directly. Open the downloaded file to install. Actions artifact links still require GitHub login; share the Release asset link instead.
 
-This rc.6 build includes clearer import blockers, excessive-quantity validation, and all rc.5 workflow improvements. Its Windows workflow passed the dependency audit, code checks, automated tests, Electron journeys, and packaged SQLite startup check.
+This stable 1.0.0 release promotes the owner-tested rc.6 application with a version-only change. The owner confirmed successful Windows laptop acceptance of the core store workflows. Its Windows workflow passed the dependency audit, code checks, automated tests, Electron journeys, and packaged SQLite startup check.
 
 ## Create the next build — recommended, including from a Mac
 
-1. Change `version` in `apps/desktop/package.json` to a new version, for example `0.1.0-rc.7` for another test candidate. Keep each distributed build's version unique.
+1. Change `version` in `apps/desktop/package.json` to a new version, for example `1.0.1` for a maintenance release. Keep each distributed build's version unique.
 2. Commit and push the intended changes to `main`. Normal pushes start the Windows workflow automatically. A documentation-only commit marked `[skip ci]` does not.
 3. Open [GitHub → Actions → Desktop quality](https://github.com/ShairAli10/Orix-Retail-OS/actions/workflows/quality.yml).
 4. Open the run for your commit. Wait for a green **success** result. The workflow installs dependencies, audits security, runs tests, builds the Windows installer, and checks packaged-app startup.
