@@ -4,12 +4,11 @@
 
 Version: **0.1.0-rc.6**, built from application commit `5f1a72664f42b910bf2f1127f5b8f21043ce9636`.
 
-- [Download the installer ZIP directly](https://github.com/ShairAli10/Orix-Retail-OS/actions/runs/36992437005/artifacts/11220950146)
+- [Download the Windows installer directly — no login required](https://github.com/ShairAli10/Orix-Retail-OS/releases/download/v0.1.0-rc.6/Orix-Retail-OS-Setup-0.1.0-rc.6-x64.exe)
+- [Release page and checksums](https://github.com/ShairAli10/Orix-Retail-OS/releases/tag/v0.1.0-rc.6)
 - [Open its successful build](https://github.com/ShairAli10/Orix-Retail-OS/actions/runs/36992437005)
 
-The direct artifact link is the kind of link that starts downloading when clicked. Sign in to a GitHub account with access to this **private** repository. It downloads a ZIP, not the EXE itself. Extract it and find `Orix-Retail-OS-Setup-0.1.0-rc.6-x64.exe`, together with `SHA256SUMS.txt` and `build-record.json`.
-
-This link always refers to that specific build. Artifacts are retained for 90 days unless deleted earlier; it is not a permanent latest-version link. New builds have new links.
+The public release link downloads the EXE directly. Open the downloaded file to install. Actions artifact links still require GitHub login; share the Release asset link instead.
 
 This rc.6 build includes clearer import blockers, excessive-quantity validation, and all rc.5 workflow improvements. Its Windows workflow passed the dependency audit, code checks, automated tests, Electron journeys, and packaged SQLite startup check.
 
@@ -52,4 +51,4 @@ The installer preserves the existing data directory. Do not delete the database,
 
 ## Sharing without GitHub access
 
-A private Actions artifact link will not work for a store owner without repository access. Share the downloaded installer through a restricted Drive/OneDrive folder, or set up a separate public downloads-only repository if public installer access is acceptable. No public download repository or permanent latest-release link has been created yet.
+The repository is public. Publish each verified installer as an asset on a GitHub Release, tagged with its version and targeting the exact tested application commit. Upload the EXE, SHA256SUMS.txt and build-record.json from the successful workflow artifact. Share the EXE asset link from the Release page; no GitHub login is required. Release candidates should be marked as prereleases.
