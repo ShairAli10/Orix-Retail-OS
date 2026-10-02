@@ -2,20 +2,20 @@
 
 ## Download the current installer
 
-Version: **0.1.0-rc.4**, built from application commit `7bdd7610122afe1d4ca3aa1ec166b46044f34f36`.
+Version: **0.1.0-rc.6**, built from application commit `5f1a72664f42b910bf2f1127f5b8f21043ce9636`.
 
-- [Download the installer ZIP directly](https://github.com/ShairAli10/Orix-Retail-OS/actions/runs/36849359244/artifacts/11155310925)
-- [Open its successful build](https://github.com/ShairAli10/Orix-Retail-OS/actions/runs/36849359244)
+- [Download the installer ZIP directly](https://github.com/ShairAli10/Orix-Retail-OS/actions/runs/36992437005/artifacts/11220950146)
+- [Open its successful build](https://github.com/ShairAli10/Orix-Retail-OS/actions/runs/36992437005)
 
-The direct artifact link is the kind of link that starts downloading when clicked. Sign in to a GitHub account with access to this **private** repository. It downloads a ZIP, not the EXE itself. Extract it and find `Orix-Retail-OS-Setup-0.1.0-rc.4-x64.exe`, together with `SHA256SUMS.txt` and `build-record.json`.
+The direct artifact link is the kind of link that starts downloading when clicked. Sign in to a GitHub account with access to this **private** repository. It downloads a ZIP, not the EXE itself. Extract it and find `Orix-Retail-OS-Setup-0.1.0-rc.6-x64.exe`, together with `SHA256SUMS.txt` and `build-record.json`.
 
 This link always refers to that specific build. Artifacts are retained for 90 days unless deleted earlier; it is not a permanent latest-version link. New builds have new links.
 
-This rc.4 build includes the local-date/time fixes. Its Windows workflow passed the dependency audit, code checks, automated tests, Electron journeys, and packaged SQLite startup check.
+This rc.6 build includes clearer import blockers, excessive-quantity validation, and all rc.5 workflow improvements. Its Windows workflow passed the dependency audit, code checks, automated tests, Electron journeys, and packaged SQLite startup check.
 
 ## Create the next build — recommended, including from a Mac
 
-1. Change `version` in `apps/desktop/package.json` to a new version, for example `0.1.0-rc.5` for another test candidate. Keep each distributed build's version unique.
+1. Change `version` in `apps/desktop/package.json` to a new version, for example `0.1.0-rc.7` for another test candidate. Keep each distributed build's version unique.
 2. Commit and push the intended changes to `main`. Normal pushes start the Windows workflow automatically. A documentation-only commit marked `[skip ci]` does not.
 3. Open [GitHub → Actions → Desktop quality](https://github.com/ShairAli10/Orix-Retail-OS/actions/workflows/quality.yml).
 4. Open the run for your commit. Wait for a green **success** result. The workflow installs dependencies, audits security, runs tests, builds the Windows installer, and checks packaged-app startup.
