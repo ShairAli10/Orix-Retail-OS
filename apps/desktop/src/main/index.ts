@@ -1480,6 +1480,13 @@ const registerUserHandlers = (state: AppState): void => {
             );
             if (otherOwners === 0) return appFail("Keep at least one active owner account.");
           }
+          if (payload.password !== undefined && (typeof payload.password !== "string" || payload.password.length < 8))
+            return appFail("Password must be at least 8 characters.");
+          if (payload.pin !== undefined && (typeof payload.pin !== "string" || !/^\d{4}$/.test(payload.pin)))
+            return appFail("PIN must be exactly 4 digits.");
+          const existingCredentials = payload.id === undefined ? undefined : credentialForUser(state.connection, state.storeId, payload.id);
+          if (payload.id !== undefined && !existingCredentials)
+            return appFail("User credentials were not found.");
           const userId = payload.id ?? randomUUID();
           const status = payload.status === "active" ? "active" : "inactive";
           if (payload.id === undefined) {
@@ -1528,6 +1535,18 @@ const registerUserHandlers = (state: AppState): void => {
                 userId,
                 state.storeId
               );
+          }
+          if (payload.id !== undefined && existingCredentials && (payload.password !== undefined || payload.pin !== undefined)) {
+            const next = { ...existingCredentials };
+            if (payload.password !== undefined) {
+              next.passwordSalt = randomBytes(16).toString("hex");
+              next.passwordHash = deriveHash(payload.password, next.passwordSalt);
+            }
+            if (payload.pin !== undefined) {
+              next.pinSalt = randomBytes(16).toString("hex");
+              next.pinHash = deriveHash(payload.pin, next.pinSalt);
+            }
+            upsertSetting(state.connection, state.storeId, `auth.credentials.${userId}`, next, "auth", state.userId, true);
           }
           seedRolesAndPermissions(state.connection, state.storeId, state.userId, timestamp);
           assignRoles(

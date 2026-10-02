@@ -21,6 +21,12 @@ test("Settings keeps draft changes explicit and sections usable", async () => {
     await page.locator(".sidebar").getByRole("button", { name: "Settings", exact: true }).click();
 
     await page.getByRole("tab", { name: "Users", exact: true }).click();
+    await page.locator(".user-row").filter({ hasText: "Demo Cashier" }).getByRole("button", { name: "Edit Demo Cashier", exact: true }).click();
+    await page.getByLabel("New Password", { exact: true }).fill("UpdatedCashier!2026");
+    await page.getByLabel(/^New PIN/).fill("2468");
+    await page.getByRole("button", { name: "Save User", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+
     for (const width of [1440, 800]) {
       await page.setViewportSize({ width, height: 768 });
       await expect(page.getByRole("button", { name: "New user", exact: true })).toBeVisible();
@@ -92,7 +98,7 @@ test("Settings keeps draft changes explicit and sections usable", async () => {
     const denied = await page.evaluate(() => window.orix.users.list({ search: "", status: "all" }));
     expect(denied.ok).toBe(false);
     await page.getByLabel("Username", { exact: true }).fill("cashier");
-    await page.locator('input[type="password"]').fill("DemoCashier!2026");
+    await page.locator('input[type="password"]').fill("UpdatedCashier!2026");
     await page.getByRole("button", { name: "Login", exact: true }).click();
     await expect(page.locator(".title-meta")).toContainText("Demo Cashier");
   } finally {

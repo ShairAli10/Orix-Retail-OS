@@ -49,6 +49,25 @@ const sale = async (overrides = {}) => {
     ...overrides
   };
 };
+ test("editing a user updates credentials and preserves omitted secrets", async () => {
+  await login();
+  const fields = {fullName:"Credential Test",username:"credential-test",roleNames:["Cashier"],status:"active"};
+  const created = await ok("users.save", {...fields,password:"InitialPass!2026",pin:"1357"});
+  await ok("users.save", {...fields,id:created.user.id,password:"UpdatedPass!2026"});
+  assert.equal((await desktop.call("auth.login", {username:fields.username,password:"InitialPass!2026"})).ok,false);
+  await ok("auth.login", {username:fields.username,password:"UpdatedPass!2026"});
+  await ok("auth.login", {username:fields.username,pin:"1357"});
+  await login();
+  await ok("users.save", {...fields,id:created.user.id,pin:"2468"});
+  assert.equal((await desktop.call("auth.login", {username:fields.username,pin:"1357"})).ok,false);
+  await ok("auth.login", {username:fields.username,pin:"2468"});
+  await ok("auth.login", {username:fields.username,password:"UpdatedPass!2026"});
+  await login();
+  assert.equal((await desktop.call("users.save", {...fields,id:created.user.id,password:"short"})).ok,false);
+  await ok("auth.login", {username:fields.username,password:"UpdatedPass!2026"});
+  await login();
+ });
+
 test("customer and supplier notes decode empty metadata without exposing JSON", async () => {
   await login();
   for (const table of ["customers", "suppliers"]) {
@@ -758,3 +777,4 @@ test("verified restore replaces the database and preserves a safety backup", asy
   }
   assert.equal((await desktop.call("products.catalog", {})).ok, false);
 });
+
